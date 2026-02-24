@@ -7,6 +7,7 @@ import {
   getGameStartDate,
   getParticipantById,
   getParticipantLatestSnapshot,
+  getLatestTradeDateForPortfolio,
   getParticipantSnapshots,
   getTradesForPortfolio,
   getPriceOnOrBefore,
@@ -95,6 +96,7 @@ export async function fetchLeaderboard(sortBy: "return" | "sharpe" = "return") {
     participantRows.map(async (row) => ({
       ...row,
       latestSnapshot: await getParticipantLatestSnapshot(row.participant.id),
+      latestTradeDate: await getLatestTradeDateForPortfolio(row.portfolio.id),
     })),
   );
 
@@ -112,54 +114,140 @@ export async function fetchLeaderboard(sortBy: "return" | "sharpe" = "return") {
 
   const latestDate =
     withSnapshot
-      .map((x) => String(x.latestSnapshot.date))
+      .map((x) =>
+        [String(x.latestSnapshot.date), x.latestTradeDate]
+          .filter((v): v is string => Boolean(v))
+          .sort((a, b) => a.localeCompare(b))
+          .at(-1),
+      )
+      .filter((v): v is string => Boolean(v))
       .sort((a, b) => a.localeCompare(b))
       .at(-1) ?? null;
 
+  const gameStartDate = await getGameStartDate();
   const cache = createValueCache();
 
-  const computed = await Promise.all(
-    withSnapshot.map(async ({ participant, portfolio, latestSnapshot }) => {
-      const snapshotDate = String(latestSnapshot.date);
-      const totalReturn = Number(latestSnapshot.total_return_pct);
-      const spyReturn = toNumOrNull(latestSnapshot.spy_return_pct);
-      const kospiReturn = toNumOrNull(latestSnapshot.kospi_return_pct);
-      const alphaSpyRaw = toNumOrNull(latestSnapshot.alpha_spy_pct);
-      const alphaKospiRaw = toNumOrNull(latestSnapshot.alpha_kospi_pct);
-      const alphaSpy = alphaSpyRaw ?? (spyReturn === null ? null : totalReturn - spyReturn);
-      const alphaKospi =
-        alphaKospiRaw ?? (kospiReturn === null ? null : totalReturn - kospiReturn);
+  let spyByDate: Record<string, number | null> = {};
+  let kospiByDate: Record<string, number | null> = {};
+  try {
+    if (latestDate) {
+      const [spy, kospi] = await Promise.all([
+        getBenchmarkByCode("SPY"),
+        getBenchmarkByCode("KOSPI"),
+      ]);
 
-      const navKrw = Number(latestSnapshot.nav_krw);
-      const cashKrw = Number(latestSnapshot.cash_krw);
-      const holdingsKrw = Number(latestSnapshot.holdings_value_krw);
+      if (spy && kospi) {
+        const [spyPrices, kospiPrices] = await Promise.all([
+          getBenchmarkPriceSeries(spy.id, "1900-01-01", latestDate),
+          getBenchmarkPriceSeries(kospi.id, "1900-01-01", latestDate),
+        ]);
+        spyByDate = buildBenchmarkReturnByDate(
+          "SPY",
+          gameStartDate,
+          latestDate,
+          spyPrices,
+        ).returnByDate;
+        kospiByDate = buildBenchmarkReturnByDate(
+          "KOSPI",
+          gameStartDate,
+          latestDate,
+          kospiPrices,
+        ).returnByDate;
+      }
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Unknown benchmark error";
+    console.error(`[leaderboard] benchmark lookup failed: ${msg}`);
+  }
+
+  const computed = await Promise.all(
+    withSnapshot.map(async ({ participant, portfolio, latestSnapshot, latestTradeDate }) => {
+      const snapshotDate = String(latestSnapshot.date);
+      const valuationDate =
+        [snapshotDate, latestTradeDate]
+          .filter((v): v is string => Boolean(v))
+          .sort((a, b) => a.localeCompare(b))
+          .at(-1) ?? snapshotDate;
+      const startingCash = Number(participant.starting_cash_krw);
+
+      let totalReturn = Number(latestSnapshot.total_return_pct);
+      let navKrw = Number(latestSnapshot.nav_krw);
+      let cashKrw = Number(latestSnapshot.cash_krw);
+      let holdingsKrw = Number(latestSnapshot.holdings_value_krw);
+      let realizedPnlKrw = Number(latestSnapshot.realized_pnl_krw);
+      let unrealizedPnlKrw = Number(latestSnapshot.unrealized_pnl_krw);
 
       let turnover20d: number | null = null;
       let topReturn: RankedInstrumentStat[] = [];
       let topWeight: RankedInstrumentStat[] = [];
       let topUnrealized: RankedInstrumentStat[] = [];
-      const state = await rebuildPortfolioState(
-        portfolio,
-        participant,
-        snapshotDate,
-        cache,
-      );
-      turnover20d = await computeTurnover20d({
-        portfolioId: portfolio.id,
-        date: snapshotDate,
-        navKrw,
-        cache,
-      });
+      let state: Awaited<ReturnType<typeof rebuildPortfolioState>> | null = null;
+      let stateDate = valuationDate;
+
+      try {
+        state = await rebuildPortfolioState(
+          portfolio,
+          participant,
+          valuationDate,
+          cache,
+        );
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "Unknown valuation error";
+        console.error(
+          `[leaderboard] live valuation failed for ${participant.id} (${valuationDate}): ${msg}`,
+        );
+      }
+
+      if (!state && snapshotDate !== valuationDate) {
+        try {
+          state = await rebuildPortfolioState(
+            portfolio,
+            participant,
+            snapshotDate,
+            cache,
+          );
+          stateDate = snapshotDate;
+        } catch (err) {
+          const msg =
+            err instanceof Error ? err.message : "Unknown snapshot valuation error";
+          console.error(
+            `[leaderboard] snapshot valuation failed for ${participant.id} (${snapshotDate}): ${msg}`,
+          );
+        }
+      }
+
+      if (state) {
+        navKrw = state.nav_krw;
+        cashKrw = state.cash_krw;
+        holdingsKrw = state.holdings_value_krw;
+        realizedPnlKrw = state.realized_pnl_krw;
+        unrealizedPnlKrw = state.unrealized_pnl_krw;
+        totalReturn = startingCash === 0 ? 0 : navKrw / startingCash - 1;
+      }
+
+      try {
+        turnover20d = await computeTurnover20d({
+          portfolioId: portfolio.id,
+          date: valuationDate,
+          navKrw,
+          cache,
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "Unknown turnover error";
+        console.error(
+          `[leaderboard] turnover calc failed for ${participant.id} (${valuationDate}): ${msg}`,
+        );
+      }
 
       const returnItems: Array<{ symbol: string; value: number | null }> = [];
       const weightItems: Array<{ symbol: string; value: number | null }> = [];
       const unrealizedItems: Array<{ symbol: string; value: number | null }> = [];
 
-      for (const p of state.positions) {
+      for (const p of state?.positions ?? []) {
         const close =
-          (await cache.priceOnOrBefore(p.instrument.id, snapshotDate)) ?? p.avg_cost_local;
+          (await cache.priceOnOrBefore(p.instrument.id, stateDate)) ?? p.avg_cost_local;
         const isUsd = p.instrument.currency === "USD";
-        const fx = isUsd ? await cache.fxOnOrBefore(snapshotDate) : 1;
+        const fx = isUsd ? await cache.fxOnOrBefore(stateDate) : 1;
         if (isUsd && !fx) continue;
         const fxRate = fx ?? 1;
         const valueKrw = p.quantity * close * fxRate;
@@ -177,16 +265,27 @@ export async function fetchLeaderboard(sortBy: "return" | "sharpe" = "return") {
       topWeight = top3Stats(weightItems);
       topUnrealized = top3Stats(unrealizedItems);
 
+      const spyReturn =
+        spyByDate[valuationDate] ?? toNumOrNull(latestSnapshot.spy_return_pct);
+      const kospiReturn =
+        kospiByDate[valuationDate] ?? toNumOrNull(latestSnapshot.kospi_return_pct);
+      const alphaSpyRaw = toNumOrNull(latestSnapshot.alpha_spy_pct);
+      const alphaKospiRaw = toNumOrNull(latestSnapshot.alpha_kospi_pct);
+      const alphaSpy =
+        spyReturn === null ? alphaSpyRaw : totalReturn - spyReturn;
+      const alphaKospi =
+        kospiReturn === null ? alphaKospiRaw : totalReturn - kospiReturn;
+
       const leaderboardRow: LeaderboardRow = {
         participant_id: participant.id,
         participant_name: participant.name,
         color_tag: participant.color_tag,
-        date: snapshotDate,
+        date: valuationDate,
         nav_krw: navKrw,
         cash_krw: cashKrw,
         holdings_value_krw: holdingsKrw,
-        realized_pnl_krw: Number(latestSnapshot.realized_pnl_krw),
-        unrealized_pnl_krw: Number(latestSnapshot.unrealized_pnl_krw),
+        realized_pnl_krw: realizedPnlKrw,
+        unrealized_pnl_krw: unrealizedPnlKrw,
         total_return_pct: totalReturn,
         spy_return_pct: spyReturn,
         kospi_return_pct: kospiReturn,

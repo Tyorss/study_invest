@@ -358,6 +358,21 @@ export async function getTradesJournal(portfolioId: string) {
   return data ?? [];
 }
 
+export async function getLatestTradeDateForPortfolio(
+  portfolioId: string,
+): Promise<string | null> {
+  const supabase = getAdminSupabase();
+  const { data, error } = await supabase
+    .from("trades")
+    .select("trade_date")
+    .eq("portfolio_id", portfolioId)
+    .order("trade_date", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  return data?.trade_date ? String(data.trade_date) : null;
+}
+
 export async function getBenchmarkPriceSeries(
   instrumentId: string,
   fromDate: string,

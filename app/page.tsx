@@ -19,7 +19,7 @@ export default async function Home({
       <header className="panel p-5">
         <h1 className="text-2xl font-semibold tracking-tight">Paper Trading Competition</h1>
         <p className="mt-2 text-sm text-slate-600">
-          Daily snapshots and analytics for 10 participants. Latest snapshot date:{" "}
+          Daily snapshots and analytics for 10 participants. Latest valuation date:{" "}
           <span className="font-semibold">{date ?? "-"}</span>
         </p>
         <div className="mt-4">
