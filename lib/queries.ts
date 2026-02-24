@@ -255,26 +255,54 @@ export async function fetchParticipantDetail(participantId: string) {
     .at(-1) ?? null;
 
   const valuationCache = createValueCache();
-  const liveState =
-    valuationDate === null
-      ? null
-      : await rebuildPortfolioState(
-          pair.portfolio,
-          pair.participant,
-          valuationDate,
-          valuationCache,
-        );
+  let resolvedValuationDate = valuationDate;
+  let liveState: Awaited<ReturnType<typeof rebuildPortfolioState>> | null = null;
+
+  if (resolvedValuationDate) {
+    try {
+      liveState = await rebuildPortfolioState(
+        pair.portfolio,
+        pair.participant,
+        resolvedValuationDate,
+        valuationCache,
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Unknown valuation error";
+      console.error(
+        `[participant-detail] live valuation failed for ${participantId} (${resolvedValuationDate}): ${msg}`,
+      );
+      if (latestSnapshotDate && latestSnapshotDate !== resolvedValuationDate) {
+        try {
+          liveState = await rebuildPortfolioState(
+            pair.portfolio,
+            pair.participant,
+            latestSnapshotDate,
+            valuationCache,
+          );
+          resolvedValuationDate = latestSnapshotDate;
+        } catch (fallbackErr) {
+          const fallbackMsg =
+            fallbackErr instanceof Error ? fallbackErr.message : "Unknown fallback valuation error";
+          console.error(
+            `[participant-detail] fallback valuation failed for ${participantId} (${latestSnapshotDate}): ${fallbackMsg}`,
+          );
+          liveState = null;
+          resolvedValuationDate = latestSnapshotDate;
+        }
+      }
+    }
+  }
 
   let holdings: any[] = [];
-  if (valuationDate && liveState) {
+  if (resolvedValuationDate && liveState) {
     holdings = [];
     for (const p of liveState.positions) {
       const close =
-        (await valuationCache.priceOnOrBefore(p.instrument.id, valuationDate)) ??
+        (await valuationCache.priceOnOrBefore(p.instrument.id, resolvedValuationDate)) ??
         p.avg_cost_local;
       const fx =
         p.instrument.currency === "USD"
-          ? await valuationCache.fxOnOrBefore(valuationDate)
+          ? await valuationCache.fxOnOrBefore(resolvedValuationDate)
           : 1;
       const fxRate = fx ?? 1;
       const valueKrw = p.quantity * close * fxRate;
@@ -293,14 +321,21 @@ export async function fetchParticipantDetail(participantId: string) {
     }
   }
 
-  const [spy, kospi] = await Promise.all([
-    getBenchmarkByCode("SPY"),
-    getBenchmarkByCode("KOSPI"),
-  ]);
+  let spy: Awaited<ReturnType<typeof getBenchmarkByCode>> = null;
+  let kospi: Awaited<ReturnType<typeof getBenchmarkByCode>> = null;
+  try {
+    [spy, kospi] = await Promise.all([
+      getBenchmarkByCode("SPY"),
+      getBenchmarkByCode("KOSPI"),
+    ]);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Unknown benchmark error";
+    console.error(`[participant-detail] benchmark lookup failed: ${msg}`);
+  }
 
   let spyByDate: Record<string, number | null> = {};
   let kospiByDate: Record<string, number | null> = {};
-  const benchmarkEndDate = valuationDate ?? latestSnapshotDate;
+  const benchmarkEndDate = resolvedValuationDate ?? latestSnapshotDate;
   if (benchmarkEndDate && spy && kospi) {
     const [spyPrices, kospiPrices] = await Promise.all([
       getBenchmarkPriceSeries(spy.id, "1900-01-01", benchmarkEndDate),
@@ -343,19 +378,19 @@ export async function fetchParticipantDetail(participantId: string) {
     });
 
   let normalizedLatestSnapshot: any = null;
-  if (valuationDate && liveState) {
+  if (resolvedValuationDate && liveState) {
     const startingCash = Number(pair.participant.starting_cash_krw);
     const totalReturn = startingCash === 0 ? 0 : liveState.nav_krw / startingCash - 1;
-    const spyReturn = spyByDate[valuationDate] ?? null;
-    const kospiReturn = kospiByDate[valuationDate] ?? null;
+    const spyReturn = spyByDate[resolvedValuationDate] ?? null;
+    const kospiReturn = kospiByDate[resolvedValuationDate] ?? null;
     const alphaSpy = spyReturn === null ? null : totalReturn - spyReturn;
     const alphaKospi = kospiReturn === null ? null : totalReturn - kospiReturn;
     const isOfficialSnapshotDate =
-      latestSnapshot !== null && latestSnapshotDate === valuationDate;
+      latestSnapshot !== null && latestSnapshotDate === resolvedValuationDate;
 
     normalizedLatestSnapshot = {
       ...latestSnapshot,
-      date: valuationDate,
+      date: resolvedValuationDate,
       nav_krw: liveState.nav_krw,
       cash_krw: liveState.cash_krw,
       holdings_value_krw: liveState.holdings_value_krw,
