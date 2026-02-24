@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
 type NoteLine = {
@@ -20,18 +20,24 @@ export function ParticipantNotesEditor({
   initialLines,
 }: Props) {
   const router = useRouter();
-  const [marketNote, setMarketNote] = useState(initialMarketNote);
-  const [rows, setRows] = useState<NoteLine[]>(
+  const toRows = () =>
     initialLines.length > 0
       ? initialLines.map((x) => ({
           symbol: x.symbol ?? "",
           memo_text: x.memo_text ?? "",
         }))
-      : [{ symbol: "", memo_text: "" }],
-  );
+      : [{ symbol: "", memo_text: "" }];
+
+  const [marketNote, setMarketNote] = useState(initialMarketNote);
+  const [rows, setRows] = useState<NoteLine[]>(toRows);
   const [isSaving, setIsSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setMarketNote(initialMarketNote);
+    setRows(toRows());
+  }, [participantId, initialMarketNote, initialLines]);
 
   function updateRow(index: number, key: keyof NoteLine, value: string) {
     setRows((prev) => {
