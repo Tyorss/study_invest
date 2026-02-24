@@ -1,0 +1,82 @@
+@import url("https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg-1: #f4f7fb;
+  --bg-2: #e6f0ff;
+  --ink: #0f172a;
+  --panel: #ffffff;
+  --muted: #4b5563;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  color: var(--ink);
+  font-family:
+    "Pretendard Variable",
+    "Pretendard",
+    "Noto Sans KR",
+    "Segoe UI",
+    sans-serif;
+  font-weight: 400;
+  background:
+    radial-gradient(1200px 600px at 0% -20%, #d7e7ff 0%, transparent 60%),
+    radial-gradient(1200px 600px at 100% 0%, #d6fff3 0%, transparent 55%),
+    linear-gradient(160deg, var(--bg-1), var(--bg-2));
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-family:
+    "Pretendard Variable",
+    "Pretendard",
+    "Noto Sans KR",
+    "Segoe UI",
+    sans-serif;
+  font-weight: 600;
+}
+
+code,
+pre {
+  font-family:
+    var(--font-mono),
+    "JetBrains Mono",
+    monospace;
+}
+
+table tbody {
+  font-weight: 400;
+}
+
+.num {
+  font-family:
+    var(--font-mono),
+    "JetBrains Mono",
+    "Cascadia Mono",
+    monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.panel {
+  @apply rounded-2xl bg-white/90 backdrop-blur-sm shadow-panel border border-slate-200/70;
+}
+
+.metric {
+  @apply text-sm text-slate-500;
+}
+
+.metric-value {
+  @apply text-lg font-semibold text-slate-900;
+}

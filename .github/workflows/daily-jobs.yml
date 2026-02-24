@@ -1,0 +1,28 @@
+name: Daily Market Jobs
+
+on:
+  schedule:
+    - cron: "10 16 * * *"
+  workflow_dispatch:
+
+jobs:
+  run-daily:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Hit update-prices
+        run: |
+          curl -fsS -X POST \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            "${{ secrets.APP_BASE_URL }}/api/cron/update-prices"
+
+      - name: Hit update-fx
+        run: |
+          curl -fsS -X POST \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            "${{ secrets.APP_BASE_URL }}/api/cron/update-fx"
+
+      - name: Hit generate-snapshots
+        run: |
+          curl -fsS -X POST \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            "${{ secrets.APP_BASE_URL }}/api/cron/generate-snapshots"
