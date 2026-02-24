@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { fetchParticipantDetail } from "@/lib/queries";
 
+export const dynamic = "force-dynamic";
+
 function csvEscape(value: unknown) {
   const s = String(value ?? "");
   if (/[",\n]/.test(s)) {
