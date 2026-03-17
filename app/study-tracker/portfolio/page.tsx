@@ -1,14 +1,14 @@
 import Link from "next/link";
 import { StudyTrackerNav } from "@/components/study-tracker-nav";
-import { StudyTrackerBoard } from "@/components/study-tracker-board";
-import { fetchStudyTrackerData } from "@/lib/study-tracker";
+import { StudyTrackerPortfolioBoard } from "@/components/study-tracker-portfolio-board";
+import { fetchStudyTrackerPortfolioData } from "@/lib/study-tracker";
 import { withStudyTrackerHint } from "@/lib/study-tracker-payload";
 
 export const dynamic = "force-dynamic";
 
-export default async function StudyTrackerPage() {
+export default async function StudyTrackerPortfolioPage() {
   try {
-    const data = await fetchStudyTrackerData();
+    const data = await fetchStudyTrackerPortfolioData();
 
     return (
       <main className="space-y-5">
@@ -18,29 +18,30 @@ export default async function StudyTrackerPage() {
               <Link href="/" className="text-sm text-slate-500 hover:underline">
                 Back to Leaderboard
               </Link>
-              <h1 className="mt-2 text-2xl font-semibold tracking-tight">Study Tracker</h1>
+              <h1 className="mt-2 text-2xl font-semibold tracking-tight">Included Portfolio</h1>
               <p className="mt-2 text-sm text-slate-600">
-                전체 발표 아이디어를 비교하는 보드입니다. 수익률은 발표일/발표가 기준의 Tracking Return입니다.
+                실제로 편입했다고 가정한 종목만 모아서 편입가 기준 Portfolio Return을 추적합니다.
               </p>
             </div>
           </div>
           <StudyTrackerNav />
         </header>
 
-        <StudyTrackerBoard data={data} />
+        <StudyTrackerPortfolioBoard data={data} />
       </main>
     );
   } catch (err) {
     const message = withStudyTrackerHint(
-      err instanceof Error ? err.message : "Failed to load study tracker",
+      err instanceof Error ? err.message : "Failed to load included portfolio",
     );
+
     return (
       <main className="space-y-5">
         <header className="panel p-5">
           <Link href="/" className="text-sm text-slate-500 hover:underline">
             Back to Leaderboard
           </Link>
-          <h1 className="mt-2 text-2xl font-semibold tracking-tight">Study Tracker</h1>
+          <h1 className="mt-2 text-2xl font-semibold tracking-tight">Included Portfolio</h1>
           <StudyTrackerNav />
         </header>
         <section className="panel p-5">

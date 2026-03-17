@@ -4,6 +4,7 @@ import {
   normalizeStudyTrackerIdeaPayload,
   withStudyTrackerHint,
 } from "@/lib/study-tracker-payload";
+import { autoFillStudyTrackerIdea } from "@/lib/study-tracker-auto";
 import { mapStudyTrackerIdea } from "@/lib/study-tracker";
 
 function errorMessage(err: unknown, fallback: string) {
@@ -35,8 +36,13 @@ export async function PATCH(
     const ideaId = parseIdeaId(params.ideaId);
     const body = await req.json();
     const input = normalizeStudyTrackerIdeaPayload(body);
-    const row = await updateStudyTrackerIdea(ideaId, input);
-    return NextResponse.json({ ok: true, idea: mapStudyTrackerIdea(row) });
+    const enriched = await autoFillStudyTrackerIdea(input);
+    const row = await updateStudyTrackerIdea(ideaId, enriched.input);
+    return NextResponse.json({
+      ok: true,
+      idea: mapStudyTrackerIdea(row),
+      warning: enriched.warning ?? undefined,
+    });
   } catch (err) {
     return NextResponse.json(
       { error: withStudyTrackerHint(errorMessage(err, "Unknown error")) },

@@ -530,6 +530,7 @@ export async function getStudyTrackerIdeas(): Promise<StudyTrackerIdeaRow[]> {
 }
 
 function normalizeStudyTrackerIdeaInput(input: StudyTrackerIdeaInput) {
+  const isIncluded = Boolean(input.is_included);
   return {
     presented_at: input.presented_at ?? null,
     presenter: input.presenter.trim(),
@@ -553,6 +554,13 @@ function normalizeStudyTrackerIdeaInput(input: StudyTrackerIdeaInput) {
     close_return_pct: input.close_return_pct ?? null,
     note: input.note?.trim() || null,
     tracking_return_pct: input.tracking_return_pct ?? null,
+    is_included: isIncluded,
+    included_at: isIncluded ? input.included_at ?? null : null,
+    included_price: isIncluded ? input.included_price ?? null : null,
+    weight: isIncluded ? input.weight ?? null : null,
+    position_status: isIncluded ? input.position_status ?? null : null,
+    exited_at: isIncluded ? input.exited_at ?? null : null,
+    exited_price: isIncluded ? input.exited_price ?? null : null,
   };
 }
 

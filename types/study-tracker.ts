@@ -23,9 +23,18 @@ export interface StudyTrackerIdeaRow {
   close_return_pct: string | null;
   note: string | null;
   tracking_return_pct: string | null;
+  is_included: boolean | null;
+  included_at: string | null;
+  included_price: string | null;
+  weight: string | null;
+  position_status: "active" | "closed" | null;
+  exited_at: string | null;
+  exited_price: string | null;
   created_at?: string;
   updated_at?: string;
 }
+
+export type StudyTrackerPositionStatus = "active" | "closed";
 
 export interface StudyTrackerIdea {
   id: number;
@@ -51,6 +60,14 @@ export interface StudyTrackerIdea {
   close_return_pct: number | null;
   note: string | null;
   tracking_return_pct: number | null;
+  is_included: boolean;
+  included_at: string | null;
+  included_price: number | null;
+  weight: number | null;
+  position_status: StudyTrackerPositionStatus | null;
+  exited_at: string | null;
+  exited_price: number | null;
+  portfolio_return_pct: number | null;
 }
 
 export interface StudyTrackerIdeaInput {
@@ -76,6 +93,13 @@ export interface StudyTrackerIdeaInput {
   close_return_pct?: number | null;
   note?: string | null;
   tracking_return_pct?: number | null;
+  is_included?: boolean | null;
+  included_at?: string | null;
+  included_price?: number | null;
+  weight?: number | null;
+  position_status?: StudyTrackerPositionStatus | null;
+  exited_at?: string | null;
+  exited_price?: number | null;
 }
 
 export interface StudyTrackerSummary {
@@ -87,10 +111,24 @@ export interface StudyTrackerSummary {
   worstIdea: StudyTrackerIdea | null;
 }
 
+export interface StudyTrackerPortfolioSummary {
+  includedIdeas: number;
+  portfolioReturnPct: number | null;
+  avgPositionReturnPct: number | null;
+  bestContributor: StudyTrackerIdea | null;
+  worstContributor: StudyTrackerIdea | null;
+}
+
 export interface StudyTrackerData {
   ideas: StudyTrackerIdea[];
   statuses: string[];
   sectors: string[];
   styles: string[];
   summary: StudyTrackerSummary;
+}
+
+export interface StudyTrackerPortfolioData {
+  ideas: StudyTrackerIdea[];
+  presenters: string[];
+  summary: StudyTrackerPortfolioSummary;
 }

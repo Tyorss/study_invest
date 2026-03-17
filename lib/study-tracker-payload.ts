@@ -32,6 +32,14 @@ function parseOptionalDate(value: unknown, field: string) {
   return text;
 }
 
+function parseOptionalBoolean(value: unknown, field: string) {
+  if (value === null || value === undefined || value === "") return null;
+  if (typeof value === "boolean") return value;
+  if (value === "true") return true;
+  if (value === "false") return false;
+  throw new Error(`${field} must be true or false`);
+}
+
 export function withStudyTrackerHint(message: string) {
   const lower = message.toLowerCase();
   const missingTable =
@@ -41,8 +49,24 @@ export function withStudyTrackerHint(message: string) {
       lower.includes("42p01") ||
       lower.includes("schema cache") ||
       lower.includes("could not find table"));
-  if (!missingTable) return message;
-  return `${message} (Run migrations/0004_study_tracker.sql in Supabase SQL editor.)`;
+  if (missingTable) {
+    return `${message} (Run migrations/0004_study_tracker.sql in Supabase SQL editor.)`;
+  }
+
+  const missingPortfolioColumns =
+    lower.includes("study_tracker_ideas") &&
+    (lower.includes("is_included") ||
+      lower.includes("included_at") ||
+      lower.includes("included_price") ||
+      lower.includes("position_status") ||
+      lower.includes("exited_at") ||
+      lower.includes("exited_price") ||
+      lower.includes("weight"));
+  if (missingPortfolioColumns) {
+    return `${message} (Run migrations/0005_study_tracker_portfolio.sql in Supabase SQL editor.)`;
+  }
+
+  return message;
 }
 
 export function normalizeStudyTrackerIdeaPayload(payload: unknown): StudyTrackerIdeaInput {
@@ -55,6 +79,14 @@ export function normalizeStudyTrackerIdeaPayload(payload: unknown): StudyTracker
   const currentReturn = parseOptionalNumber(body.current_return_pct, "current_return_pct");
   const closeReturn = parseOptionalNumber(body.close_return_pct, "close_return_pct");
   const trackingReturn = parseOptionalNumber(body.tracking_return_pct, "tracking_return_pct");
+  const positionStatus = parseOptionalString(body.position_status);
+  if (positionStatus !== null && positionStatus !== "active" && positionStatus !== "closed") {
+    throw new Error("position_status must be active or closed");
+  }
+  const weight = parseOptionalNumber(body.weight, "weight");
+  if (weight !== null && weight <= 0) {
+    throw new Error("weight must be greater than 0");
+  }
 
   return {
     presented_at: parseOptionalDate(body.presented_at, "presented_at"),
@@ -79,5 +111,12 @@ export function normalizeStudyTrackerIdeaPayload(payload: unknown): StudyTracker
     close_return_pct: closeReturn,
     note: parseOptionalString(body.note),
     tracking_return_pct: trackingReturn ?? closeReturn ?? currentReturn,
+    is_included: parseOptionalBoolean(body.is_included, "is_included"),
+    included_at: parseOptionalDate(body.included_at, "included_at"),
+    included_price: parseOptionalNumber(body.included_price, "included_price"),
+    weight,
+    position_status: positionStatus as "active" | "closed" | null,
+    exited_at: parseOptionalDate(body.exited_at, "exited_at"),
+    exited_price: parseOptionalNumber(body.exited_price, "exited_price"),
   };
 }
