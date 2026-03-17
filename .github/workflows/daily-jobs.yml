@@ -8,21 +8,25 @@ on:
 jobs:
   run-daily:
     runs-on: ubuntu-latest
+    env:
+      APP_BASE_URL: ${{ vars.APP_BASE_URL || secrets.APP_BASE_URL }}
+      CRON_SECRET: ${{ secrets.CRON_SECRET }}
     steps:
-      - name: Hit update-prices
+      - name: Validate cron config
         run: |
-          curl -fsS -X POST \
-            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
-            "${{ secrets.APP_BASE_URL }}/api/cron/update-prices"
+          if [ -z "$APP_BASE_URL" ]; then
+            echo "APP_BASE_URL is empty. Set it in GitHub Actions Variables or Secrets."
+            exit 1
+          fi
 
-      - name: Hit update-fx
-        run: |
-          curl -fsS -X POST \
-            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
-            "${{ secrets.APP_BASE_URL }}/api/cron/update-fx"
+          if [ -z "$CRON_SECRET" ]; then
+            echo "CRON_SECRET is empty. Set it in GitHub Actions Secrets."
+            exit 1
+          fi
 
-      - name: Hit generate-snapshots
+      - name: Run daily cron pipeline
         run: |
+          BASE_URL="${APP_BASE_URL%/}"
           curl -fsS -X POST \
-            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
-            "${{ secrets.APP_BASE_URL }}/api/cron/generate-snapshots"
+            -H "Authorization: Bearer $CRON_SECRET" \
+            "$BASE_URL/api/cron/run-daily"

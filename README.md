@@ -82,6 +82,11 @@ Auth options:
 - `Authorization: Bearer <CRON_SECRET>`
 - `?secret=<CRON_SECRET>`
 
+GitHub Actions setup for `.github/workflows/daily-jobs.yml`:
+
+- Repository Variable or Secret: `APP_BASE_URL=https://your-app.vercel.app`
+- Repository Secret: `CRON_SECRET=<same value as deployment env>`
+
 ## Backfill
 
 ```bash
