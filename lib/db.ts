@@ -1,5 +1,6 @@
 import { DEFAULT_GAME_START_DATE, FX_PAIR_USDKRW } from "@/lib/constants";
 import { getAdminSupabase } from "@/lib/supabase/admin";
+import type { StudyTrackerIdeaInput, StudyTrackerIdeaRow } from "@/types/study-tracker";
 import type {
   AuditLogInsert,
   CorporateActionRow,
@@ -512,5 +513,90 @@ export async function upsertParticipantNotes(
     .insert(cleanRows);
   if (insertError) {
     throw toErrorWithMessage(insertError, "Failed to insert participant note lines");
+  }
+}
+
+export async function getStudyTrackerIdeas(): Promise<StudyTrackerIdeaRow[]> {
+  const supabase = getAdminSupabase();
+  const { data, error } = await supabase
+    .from("study_tracker_ideas")
+    .select("*")
+    .order("presented_at", { ascending: false, nullsFirst: false })
+    .order("id", { ascending: false });
+  if (error) {
+    throw toErrorWithMessage(error, "Failed to read study tracker ideas");
+  }
+  return (data ?? []) as StudyTrackerIdeaRow[];
+}
+
+function normalizeStudyTrackerIdeaInput(input: StudyTrackerIdeaInput) {
+  return {
+    presented_at: input.presented_at ?? null,
+    presenter: input.presenter.trim(),
+    company_name: input.company_name.trim(),
+    ticker: input.ticker.trim(),
+    sector: input.sector?.trim() || null,
+    pitch_price: input.pitch_price ?? null,
+    target_price: input.target_price ?? null,
+    pitch_upside_pct: input.pitch_upside_pct ?? null,
+    currency: input.currency ?? null,
+    current_price: input.current_price ?? null,
+    current_upside_pct: input.current_upside_pct ?? null,
+    current_return_pct: input.current_return_pct ?? null,
+    thesis: input.thesis?.trim() || null,
+    trigger: input.trigger?.trim() || null,
+    risk: input.risk?.trim() || null,
+    style: input.style?.trim() || null,
+    status: input.status?.trim() || null,
+    entry_date: input.entry_date ?? null,
+    exit_date: input.exit_date ?? null,
+    close_return_pct: input.close_return_pct ?? null,
+    note: input.note?.trim() || null,
+    tracking_return_pct: input.tracking_return_pct ?? null,
+  };
+}
+
+export async function insertStudyTrackerIdea(
+  input: StudyTrackerIdeaInput,
+): Promise<StudyTrackerIdeaRow> {
+  const supabase = getAdminSupabase();
+  const row = normalizeStudyTrackerIdeaInput(input);
+  const { data, error } = await supabase
+    .from("study_tracker_ideas")
+    .insert(row)
+    .select("*")
+    .maybeSingle();
+  if (error || !data) {
+    throw toErrorWithMessage(error, "Failed to insert study tracker idea");
+  }
+  return data as StudyTrackerIdeaRow;
+}
+
+export async function updateStudyTrackerIdea(
+  ideaId: number,
+  input: StudyTrackerIdeaInput,
+): Promise<StudyTrackerIdeaRow> {
+  const supabase = getAdminSupabase();
+  const row = normalizeStudyTrackerIdeaInput(input);
+  const { data, error } = await supabase
+    .from("study_tracker_ideas")
+    .update(row)
+    .eq("id", ideaId)
+    .select("*")
+    .maybeSingle();
+  if (error || !data) {
+    throw toErrorWithMessage(error, "Failed to update study tracker idea");
+  }
+  return data as StudyTrackerIdeaRow;
+}
+
+export async function deleteStudyTrackerIdea(ideaId: number): Promise<void> {
+  const supabase = getAdminSupabase();
+  const { error } = await supabase
+    .from("study_tracker_ideas")
+    .delete()
+    .eq("id", ideaId);
+  if (error) {
+    throw toErrorWithMessage(error, "Failed to delete study tracker idea");
   }
 }

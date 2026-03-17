@@ -14,29 +14,30 @@ type Props = {
   initialLines: Array<{ symbol: string | null; memo_text: string }>;
 };
 
+function normalizeRows(initialLines: Props["initialLines"]): NoteLine[] {
+  return initialLines.length > 0
+    ? initialLines.map((x) => ({
+        symbol: x.symbol ?? "",
+        memo_text: x.memo_text ?? "",
+      }))
+    : [{ symbol: "", memo_text: "" }];
+}
+
 export function ParticipantNotesEditor({
   participantId,
   initialMarketNote,
   initialLines,
 }: Props) {
   const router = useRouter();
-  const toRows = () =>
-    initialLines.length > 0
-      ? initialLines.map((x) => ({
-          symbol: x.symbol ?? "",
-          memo_text: x.memo_text ?? "",
-        }))
-      : [{ symbol: "", memo_text: "" }];
-
   const [marketNote, setMarketNote] = useState(initialMarketNote);
-  const [rows, setRows] = useState<NoteLine[]>(toRows);
+  const [rows, setRows] = useState<NoteLine[]>(() => normalizeRows(initialLines));
   const [isSaving, setIsSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     setMarketNote(initialMarketNote);
-    setRows(toRows());
+    setRows(normalizeRows(initialLines));
   }, [participantId, initialMarketNote, initialLines]);
 
   function updateRow(index: number, key: keyof NoteLine, value: string) {
