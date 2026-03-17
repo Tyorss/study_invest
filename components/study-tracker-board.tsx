@@ -79,12 +79,6 @@ type SortKey =
 
 type SortDirection = "asc" | "desc";
 
-function todayLocalInputValue() {
-  const now = new Date();
-  const offset = now.getTimezoneOffset() * 60_000;
-  return new Date(now.getTime() - offset).toISOString().slice(0, 10);
-}
-
 function emptyDraft(): Draft {
   return {
     presented_at: "",
@@ -263,6 +257,25 @@ function summarizeIdea(idea: StudyTrackerIdea) {
   return candidate.length > 88 ? `${candidate.slice(0, 88)}...` : candidate;
 }
 
+function describeCurrentPriceSource(idea: StudyTrackerIdea) {
+  if (idea.current_price === null) {
+    return "저장된 현재가가 없습니다. '현재가 새로고침'을 눌러 실제 시세를 다시 가져올 수 있습니다.";
+  }
+  return "현재가는 저장된 시장 데이터입니다. 수정/저장 또는 '현재가 새로고침' 시 provider에서 다시 조회합니다.";
+}
+
+function describeTrackingFormula(idea: StudyTrackerIdea) {
+  if (idea.close_return_pct !== null) {
+    return `Close Return 우선 적용: ${formatPct(idea.close_return_pct)}`;
+  }
+  if (idea.current_price !== null && idea.pitch_price !== null && idea.pitch_price > 0) {
+    return `${formatPrice(idea.current_price, idea.currency)} / ${formatPrice(idea.pitch_price, idea.currency)} - 1 = ${formatPct(
+      idea.tracking_return_pct,
+    )}`;
+  }
+  return "발표가와 현재가가 있어야 Tracking Return을 계산할 수 있습니다.";
+}
+
 function average(values: number[]) {
   if (values.length === 0) return null;
   return values.reduce((sum, value) => sum + value, 0) / values.length;
@@ -361,6 +374,7 @@ export function StudyTrackerBoard({ data }: { data: StudyTrackerData }) {
   const [composerOpen, setComposerOpen] = useState(false);
   const [draft, setDraft] = useState<Draft>(emptyDraft);
   const [isSaving, setIsSaving] = useState(false);
+  const [isRefreshingQuotes, setIsRefreshingQuotes] = useState(false);
   const [busyId, setBusyId] = useState<number | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -488,12 +502,48 @@ export function StudyTrackerBoard({ data }: { data: StudyTrackerData }) {
     }
   }
 
+  async function refreshIdeas(targetIdeas: StudyTrackerIdea[], successMessage: string) {
+    if (targetIdeas.length === 0) return;
+    setIsRefreshingQuotes(true);
+    setMessage(null);
+    setError(null);
+
+    try {
+      const updated = new Map<number, StudyTrackerIdea>();
+      const warnings: string[] = [];
+
+      for (const idea of targetIdeas) {
+        const res = await fetch(`/api/study-tracker/ideas/${idea.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(ideaToPayload(idea)),
+        });
+        const json = await readApiResponse(res);
+        if (!res.ok || !json.ok || !json.idea) {
+          throw new Error(json.error ?? `Failed to refresh idea (HTTP ${res.status})`);
+        }
+        updated.set(json.idea.id, json.idea);
+        if (json.warning) warnings.push(`${idea.ticker}: ${json.warning}`);
+      }
+
+      setIdeas((prev) => prev.map((idea) => updated.get(idea.id) ?? idea));
+      const warningSuffix =
+        warnings.length > 0 ? ` Warnings: ${warnings.slice(0, 2).join(" | ")}` : "";
+      setMessage(`${successMessage}${warningSuffix}`);
+      router.refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to refresh live prices");
+    } finally {
+      setIsRefreshingQuotes(false);
+    }
+  }
+
   async function includeIdea(idea: StudyTrackerIdea) {
     await patchIdea(
       idea,
       {
         is_included: true,
-        included_at: idea.included_at ?? todayLocalInputValue(),
+        included_at: idea.included_at ?? idea.entry_date ?? idea.presented_at ?? null,
         included_price: idea.included_price ?? idea.current_price ?? idea.pitch_price ?? null,
         position_status: idea.position_status ?? "active",
         exited_at: null,
@@ -526,7 +576,7 @@ export function StudyTrackerBoard({ data }: { data: StudyTrackerData }) {
       {
         is_included: true,
         position_status: "closed",
-        exited_at: idea.exited_at ?? todayLocalInputValue(),
+        exited_at: idea.exited_at ?? idea.exit_date ?? null,
         exited_price: idea.exited_price ?? idea.current_price ?? null,
       },
       "Position closed.",
@@ -544,6 +594,10 @@ export function StudyTrackerBoard({ data }: { data: StudyTrackerData }) {
       },
       "Position reopened.",
     );
+  }
+
+  async function refreshIdeaQuote(idea: StudyTrackerIdea) {
+    await refreshIdeas([idea], "Live price refreshed.");
   }
 
   async function saveIdea() {
@@ -850,7 +904,7 @@ export function StudyTrackerBoard({ data }: { data: StudyTrackerData }) {
                       setDraft((prev) => ({
                         ...prev,
                         is_included: next,
-                        included_at: next ? prev.included_at || todayLocalInputValue() : "",
+                        included_at: next ? prev.included_at || prev.entry_date || prev.presented_at : "",
                         included_price: next ? prev.included_price || prev.current_price || prev.pitch_price : "",
                         position_status: next ? prev.position_status || "active" : "",
                         exited_at: next ? prev.exited_at : "",
@@ -1089,7 +1143,15 @@ export function StudyTrackerBoard({ data }: { data: StudyTrackerData }) {
             </select>
           </label>
           <div className="text-sm text-slate-500 xl:self-end">
-            헤더를 클릭하면 오름차순/내림차순 정렬이 됩니다.
+            <div>헤더를 클릭하면 오름차순/내림차순 정렬이 됩니다.</div>
+            <button
+              type="button"
+              onClick={() => refreshIdeas(sortedIdeas, `Refreshed ${sortedIdeas.length} ideas.`)}
+              disabled={isRefreshingQuotes || sortedIdeas.length === 0}
+              className="mt-2 rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {isRefreshingQuotes ? "Refreshing..." : "현재가 일괄 새로고침"}
+            </button>
           </div>
         </div>
       </section>
@@ -1229,12 +1291,20 @@ export function StudyTrackerBoard({ data }: { data: StudyTrackerData }) {
                 <div className="mt-1 text-sm text-slate-500">{selectedIdea.ticker}</div>
               </div>
               <div className="flex flex-wrap justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => startEdit(selectedIdea)}
+                    className="rounded-lg border border-slate-300 px-3 py-2 text-sm hover:bg-slate-50"
+                  >
+                    Edit
+                  </button>
                 <button
                   type="button"
-                  onClick={() => startEdit(selectedIdea)}
-                  className="rounded-lg border border-slate-300 px-3 py-2 text-sm hover:bg-slate-50"
+                  onClick={() => refreshIdeaQuote(selectedIdea)}
+                  disabled={busyId === selectedIdea.id}
+                  className="rounded-lg border border-slate-300 px-3 py-2 text-sm hover:bg-slate-50 disabled:opacity-50"
                 >
-                  Edit
+                  현재가 새로고침
                 </button>
                 {!selectedIdea.is_included ? (
                   <button
@@ -1333,6 +1403,17 @@ export function StudyTrackerBoard({ data }: { data: StudyTrackerData }) {
                 </div>
               </div>
             </div>
+
+            <section className="mt-5 grid grid-cols-1 gap-3 md:grid-cols-2">
+              <div className="rounded-xl border border-slate-200 p-3 text-sm">
+                <div className="text-slate-500">Current Source</div>
+                <div className="mt-1 text-slate-900">{describeCurrentPriceSource(selectedIdea)}</div>
+              </div>
+              <div className="rounded-xl border border-slate-200 p-3 text-sm">
+                <div className="text-slate-500">Tracking Formula</div>
+                <div className="mt-1 text-slate-900">{describeTrackingFormula(selectedIdea)}</div>
+              </div>
+            </section>
 
             <section className="mt-5 rounded-2xl border border-slate-200 p-4">
               <div className="flex items-center justify-between gap-3">

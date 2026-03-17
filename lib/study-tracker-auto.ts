@@ -154,7 +154,9 @@ export async function autoFillStudyTrackerIdea(input: StudyTrackerIdeaInput): Pr
   const currentReturn = ratioFrom(currentPrice, input.pitch_price ?? null);
   const trackingReturn = input.close_return_pct ?? currentReturn ?? input.tracking_return_pct ?? null;
   const isIncluded = Boolean(input.is_included);
-  const includedAt = isIncluded ? input.included_at ?? todayInSeoul() : null;
+  const includedAt = isIncluded
+    ? input.included_at ?? input.entry_date ?? input.presented_at ?? null
+    : null;
   const includedPrice = isIncluded
     ? input.included_price ?? currentPrice ?? input.pitch_price ?? null
     : null;

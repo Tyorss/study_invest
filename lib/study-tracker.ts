@@ -1,5 +1,12 @@
-import { getStudyTrackerIdeas } from "@/lib/db";
+import {
+  getBenchmarkByCode,
+  getInstrumentBySymbol,
+  getPricePointOnOrBefore,
+  getStudyTrackerIdeas,
+} from "@/lib/db";
+import { todayInSeoul } from "@/lib/time";
 import type {
+  StudyTrackerBenchmarkCode,
   StudyTrackerData,
   StudyTrackerIdea,
   StudyTrackerIdeaRow,
@@ -34,10 +41,25 @@ export function computeStudyTrackerPortfolioReturn(idea: {
 }
 
 export function mapStudyTrackerIdea(row: StudyTrackerIdeaRow): StudyTrackerIdea {
+  const pitchPrice = toNumber(row.pitch_price);
+  const targetPrice = toNumber(row.target_price);
   const includedPrice = toNumber(row.included_price);
   const currentPrice = toNumber(row.current_price);
   const exitedPrice = toNumber(row.exited_price);
-  const positionStatus = row.position_status ?? null;
+  const closeReturn = toNumber(row.close_return_pct);
+  const currentReturn = ratioFrom(currentPrice, pitchPrice) ?? toNumber(row.current_return_pct);
+  const currentUpside = ratioFrom(targetPrice, currentPrice) ?? toNumber(row.current_upside_pct);
+  const pitchUpside = ratioFrom(targetPrice, pitchPrice) ?? toNumber(row.pitch_upside_pct);
+  const inferredIncluded =
+    Boolean(row.is_included) ||
+    ((!row.included_at && !row.included_price && !row.position_status && !row.exited_at && !row.exited_price) &&
+      (row.status === "편입" || row.status === "전량청산"));
+  const positionStatus =
+    row.position_status ?? (row.status === "전량청산" ? "closed" : inferredIncluded ? "active" : null);
+  const resolvedIncludedPrice = inferredIncluded ? includedPrice ?? pitchPrice : null;
+  const resolvedIncludedAt = inferredIncluded ? row.included_at ?? row.entry_date ?? row.presented_at : null;
+  const resolvedExitedAt = positionStatus === "closed" ? row.exited_at ?? row.exit_date ?? null : null;
+  const trackingReturn = closeReturn ?? currentReturn ?? toNumber(row.tracking_return_pct);
 
   return {
     id: row.id,
@@ -46,13 +68,13 @@ export function mapStudyTrackerIdea(row: StudyTrackerIdeaRow): StudyTrackerIdea 
     company_name: row.company_name,
     ticker: row.ticker,
     sector: row.sector ?? null,
-    pitch_price: toNumber(row.pitch_price),
-    target_price: toNumber(row.target_price),
-    pitch_upside_pct: toNumber(row.pitch_upside_pct),
+    pitch_price: pitchPrice,
+    target_price: targetPrice,
+    pitch_upside_pct: pitchUpside,
     currency: row.currency ?? null,
     current_price: currentPrice,
-    current_upside_pct: toNumber(row.current_upside_pct),
-    current_return_pct: toNumber(row.current_return_pct),
+    current_upside_pct: currentUpside,
+    current_return_pct: currentReturn,
     thesis: row.thesis ?? null,
     trigger: row.trigger ?? null,
     risk: row.risk ?? null,
@@ -60,19 +82,19 @@ export function mapStudyTrackerIdea(row: StudyTrackerIdeaRow): StudyTrackerIdea 
     status: row.status ?? null,
     entry_date: row.entry_date ?? null,
     exit_date: row.exit_date ?? null,
-    close_return_pct: toNumber(row.close_return_pct),
+    close_return_pct: closeReturn,
     note: row.note ?? null,
-    tracking_return_pct: toNumber(row.tracking_return_pct),
-    is_included: Boolean(row.is_included),
-    included_at: row.included_at ?? null,
-    included_price: includedPrice,
+    tracking_return_pct: trackingReturn,
+    is_included: inferredIncluded,
+    included_at: resolvedIncludedAt,
+    included_price: resolvedIncludedPrice,
     weight: toNumber(row.weight),
     position_status: positionStatus,
-    exited_at: row.exited_at ?? null,
+    exited_at: resolvedExitedAt,
     exited_price: exitedPrice,
     portfolio_return_pct: computeStudyTrackerPortfolioReturn({
-      is_included: Boolean(row.is_included),
-      included_price: includedPrice,
+      is_included: inferredIncluded,
+      included_price: resolvedIncludedPrice,
       current_price: currentPrice,
       exited_price: exitedPrice,
       position_status: positionStatus,
@@ -164,13 +186,74 @@ export async function fetchStudyTrackerData(): Promise<StudyTrackerData> {
   };
 }
 
-export async function fetchStudyTrackerPortfolioData(): Promise<StudyTrackerPortfolioData> {
+const BENCHMARK_LABELS: Record<StudyTrackerBenchmarkCode, string> = {
+  NASDAQ: "Nasdaq (QQQ)",
+  SPY: "SPY",
+  KOSPI: "KOSPI",
+};
+
+async function getBenchmarkInstrument(code: StudyTrackerBenchmarkCode) {
+  if (code === "SPY") return getBenchmarkByCode("SPY");
+  if (code === "KOSPI") return getBenchmarkByCode("KOSPI");
+  return getInstrumentBySymbol("QQQ");
+}
+
+async function getBenchmarkReturnPct(
+  code: StudyTrackerBenchmarkCode,
+  fromDate: string,
+  toDate: string,
+) {
+  const instrument = await getBenchmarkInstrument(code);
+  if (!instrument) return null;
+  const [fromPoint, toPoint] = await Promise.all([
+    getPricePointOnOrBefore(instrument.id, fromDate),
+    getPricePointOnOrBefore(instrument.id, toDate),
+  ]);
+  if (!fromPoint || !toPoint || fromPoint.close <= 0) return null;
+  return toPoint.close / fromPoint.close - 1;
+}
+
+function determinePeriod(ideas: StudyTrackerIdea[], fromDate?: string, toDate?: string) {
+  const includedDates = ideas
+    .map((idea) => idea.included_at)
+    .filter((value): value is string => Boolean(value))
+    .sort((a, b) => a.localeCompare(b));
+  const fallbackFrom = includedDates[0] ?? todayInSeoul();
+  const fallbackTo = todayInSeoul();
+  return {
+    from: fromDate ?? fallbackFrom,
+    to: toDate ?? fallbackTo,
+  };
+}
+
+export async function fetchStudyTrackerPortfolioData(options?: {
+  fromDate?: string;
+  toDate?: string;
+  benchmark?: StudyTrackerBenchmarkCode;
+}): Promise<StudyTrackerPortfolioData> {
   const rows = await getStudyTrackerIdeas();
-  const ideas = rows.map(mapStudyTrackerIdea).filter((idea) => idea.is_included);
+  const allIdeas = rows.map(mapStudyTrackerIdea).filter((idea) => idea.is_included);
+  const period = determinePeriod(allIdeas, options?.fromDate, options?.toDate);
+  const benchmark = options?.benchmark ?? "SPY";
+  const ideas = allIdeas.filter((idea) => {
+    if (!idea.included_at) return true;
+    return idea.included_at >= period.from && idea.included_at <= period.to;
+  });
+  const summary = buildPortfolioSummary(ideas);
+  const benchmarkReturnPct = await getBenchmarkReturnPct(benchmark, period.from, period.to);
 
   return {
     ideas,
     presenters: sortUnique(ideas.map((idea) => idea.presenter)),
-    summary: buildPortfolioSummary(ideas),
+    summary,
+    benchmark,
+    benchmarkLabel: BENCHMARK_LABELS[benchmark],
+    benchmarkReturnPct,
+    excessReturnPct:
+      summary.portfolioReturnPct !== null && benchmarkReturnPct !== null
+        ? summary.portfolioReturnPct - benchmarkReturnPct
+        : null,
+    periodFrom: period.from,
+    periodTo: period.to,
   };
 }
