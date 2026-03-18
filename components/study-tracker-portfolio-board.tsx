@@ -64,15 +64,12 @@ function describeCurrentPriceSource(idea: StudyTrackerIdea) {
 }
 
 function describeTrackingFormula(idea: StudyTrackerIdea) {
-  if (idea.close_return_pct !== null) {
-    return `Close Return 우선 적용: ${formatPct(idea.close_return_pct)}`;
-  }
   if (idea.current_price !== null && idea.pitch_price !== null && idea.pitch_price > 0) {
     return `${formatPrice(idea.current_price, idea.currency)} / ${formatPrice(idea.pitch_price, idea.currency)} - 1 = ${formatPct(
       idea.tracking_return_pct,
     )}`;
   }
-  return "발표가와 현재가가 있어야 Tracking Return을 계산할 수 있습니다.";
+  return "Tracking Return은 항상 현재가 기준(current / pitch - 1)으로 계산합니다.";
 }
 
 function compareNullableString(a: string | null | undefined, b: string | null | undefined) {

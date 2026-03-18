@@ -1,5 +1,5 @@
 import type { Market } from "@/types/db";
-import type { MarketDataProvider } from "@/lib/providers/types";
+import type { DailyClosePoint, MarketDataProvider } from "@/lib/providers/types";
 
 const BASE_URL = "https://query1.finance.yahoo.com/v8/finance/chart";
 const RETRY_DELAYS_MS = [300, 900];
@@ -90,10 +90,10 @@ async function fetchChart(symbol: string, targetDate: string) {
   throw lastError instanceof Error ? lastError : new Error("Unknown fetch error");
 }
 
-function parseCloseOnOrBefore(
+function parseClosePointOnOrBefore(
   json: Record<string, unknown>,
   targetDate: string,
-): number | null {
+): DailyClosePoint | null {
   const chart = json.chart as Record<string, unknown> | undefined;
   const result = Array.isArray(chart?.result) ? chart?.result?.[0] : null;
   if (!result || typeof result !== "object") return null;
@@ -113,7 +113,7 @@ function parseCloseOnOrBefore(
     if (!Number.isFinite(epoch) || !Number.isFinite(c)) continue;
     const d = dateInTimeZone(epoch * 1000, exchangeTz);
     if (d <= targetDate) {
-      return c;
+      return { date: d, close: c };
     }
   }
   return null;
@@ -121,6 +121,11 @@ function parseCloseOnOrBefore(
 
 export class YahooMarketDataProvider implements MarketDataProvider {
   async getDailyClose(symbol: string, market: Market, date: string) {
+    const point = await this.getDailyClosePoint(symbol, market, date);
+    return point?.close ?? null;
+  }
+
+  async getDailyClosePoint(symbol: string, market: Market, date: string) {
     const candidates = symbolCandidates(symbol, market);
     let lastError: string | null = null;
 
@@ -130,9 +135,9 @@ export class YahooMarketDataProvider implements MarketDataProvider {
         lastError = `[Yahoo] No response for ${candidate}`;
         continue;
       }
-      const close = parseCloseOnOrBefore(json, date);
-      if (close !== null && Number.isFinite(close)) {
-        return close;
+      const point = parseClosePointOnOrBefore(json, date);
+      if (point !== null && Number.isFinite(point.close)) {
+        return point;
       }
       lastError = `[Yahoo] ${candidate}: no close on/before ${date}`;
     }
@@ -149,7 +154,7 @@ export class YahooMarketDataProvider implements MarketDataProvider {
     if (!json) {
       throw new Error("[Yahoo] KRW=X: no response");
     }
-    const close = parseCloseOnOrBefore(json, date);
+    const close = parseClosePointOnOrBefore(json, date)?.close ?? null;
     if (close === null || !Number.isFinite(close)) {
       throw new Error(`[Yahoo] KRW=X: no close on/before ${date}`);
     }

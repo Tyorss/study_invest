@@ -44,6 +44,7 @@ export interface TradeRow {
   id: number;
   portfolio_id: string;
   instrument_id: string;
+  source_idea_id: number | null;
   order_id: number | null;
   fill_id: number | null;
   trade_date: string;

@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 
 type Props = {
   portfolioId: string;
+  studyCallOptions: Array<{ id: number; label: string }>;
 };
 
 function todayLocalIsoDate() {
@@ -42,7 +43,7 @@ function formatKoreanAmount(value: number): string {
   return `${sign}${parts.join(" ")}`;
 }
 
-export function TradeEntryForm({ portfolioId }: Props) {
+export function TradeEntryForm({ portfolioId, studyCallOptions }: Props) {
   const router = useRouter();
   const [symbol, setSymbol] = useState("");
   const [market, setMarket] = useState<"KR" | "US" | "INDEX">("US");
@@ -53,6 +54,7 @@ export function TradeEntryForm({ portfolioId }: Props) {
   const [buyAmount, setBuyAmount] = useState("");
   const [price, setPrice] = useState("");
   const [note, setNote] = useState("");
+  const [sourceIdeaId, setSourceIdeaId] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -60,6 +62,14 @@ export function TradeEntryForm({ portfolioId }: Props) {
   const [fxEffectiveDate, setFxEffectiveDate] = useState<string | null>(null);
   const [isFxLoading, setIsFxLoading] = useState(false);
   const [fxError, setFxError] = useState<string | null>(null);
+  const [isQuoteLoading, setIsQuoteLoading] = useState(false);
+  const [quoteError, setQuoteError] = useState<string | null>(null);
+  const [quoteInfo, setQuoteInfo] = useState<{
+    source: string;
+    requestedDate: string;
+    effectiveDate: string | null;
+  } | null>(null);
+  const [priceDirty, setPriceDirty] = useState(false);
 
   const showQuantity = useMemo(() => side !== "CLOSE", [side]);
   const buyAmountValue = useMemo(() => Number(buyAmount), [buyAmount]);
@@ -71,6 +81,77 @@ export function TradeEntryForm({ portfolioId }: Props) {
   const hasValidPrice = useMemo(
     () => Number.isFinite(priceValue) && priceValue > 0,
     [priceValue],
+  );
+  const canLookupQuote = useMemo(
+    () => symbol.trim().length > 0 && /^\d{4}-\d{2}-\d{2}$/.test(tradeDate),
+    [symbol, tradeDate],
+  );
+
+  const fetchQuote = useCallback(
+    async (options?: { silent?: boolean; force?: boolean }) => {
+      const silent = options?.silent ?? false;
+      const force = options?.force ?? false;
+      if (!canLookupQuote) return;
+      if (!force && priceDirty && price.trim().length > 0) return;
+
+      const params = new URLSearchParams({
+        symbol: symbol.trim(),
+        market,
+        date: tradeDate,
+      });
+
+      setIsQuoteLoading(true);
+      if (!silent) {
+        setQuoteError(null);
+      }
+
+      try {
+        const res = await fetch(`/api/trades/quote?${params.toString()}`, {
+          cache: "no-store",
+        });
+        const contentType = res.headers.get("content-type") ?? "";
+        type QuoteResponse = {
+          ok?: boolean;
+          error?: string;
+          price?: number;
+          source?: string;
+          effective_date?: string | null;
+          requested_date?: string;
+          instrument_name?: string | null;
+        };
+        let json: QuoteResponse | null = null;
+
+        if (contentType.includes("application/json")) {
+          json = (await res.json()) as QuoteResponse;
+        } else {
+          const text = await res.text();
+          throw new Error(text?.trim() || `Quote API returned non-JSON response (HTTP ${res.status})`);
+        }
+
+        if (!res.ok || !json?.ok || !Number.isFinite(Number(json.price))) {
+          throw new Error(json?.error ?? `Failed to fetch quote (HTTP ${res.status})`);
+        }
+
+        setPrice(String(json.price));
+        setPriceDirty(false);
+        setQuoteInfo({
+          source: json.source ?? "unknown",
+          requestedDate: json.requested_date ?? tradeDate,
+          effectiveDate: json.effective_date ?? null,
+        });
+        if (!instrumentName.trim() && json.instrument_name?.trim()) {
+          setInstrumentName(json.instrument_name.trim());
+        }
+        setQuoteError(null);
+      } catch (err) {
+        if (!silent) {
+          setQuoteError(err instanceof Error ? err.message : "Failed to fetch quote");
+        }
+      } finally {
+        setIsQuoteLoading(false);
+      }
+    },
+    [canLookupQuote, instrumentName, market, price, priceDirty, symbol, tradeDate],
   );
 
   useEffect(() => {
@@ -134,6 +215,24 @@ export function TradeEntryForm({ portfolioId }: Props) {
       cancelled = true;
     };
   }, [side, market, tradeDate]);
+
+  useEffect(() => {
+    setQuoteInfo(null);
+    setQuoteError(null);
+  }, [symbol, market, tradeDate]);
+
+  useEffect(() => {
+    if (!canLookupQuote) return;
+    if (priceDirty && price.trim().length > 0) return;
+
+    const timer = window.setTimeout(() => {
+      void fetchQuote({ silent: true, force: true });
+    }, 450);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [canLookupQuote, fetchQuote, price, priceDirty]);
 
   const autoQuantity = useMemo(() => {
     if (!hasBuyAmount || !hasValidPrice) return null;
@@ -222,6 +321,7 @@ export function TradeEntryForm({ portfolioId }: Props) {
         symbol: symbol.trim(),
         market,
         instrument_name: instrumentName.trim() || undefined,
+        source_idea_id: sourceIdeaId ? Number(sourceIdeaId) : null,
         trade_date: tradeDate,
         side,
         quantity: normalizedQuantity,
@@ -279,7 +379,11 @@ export function TradeEntryForm({ portfolioId }: Props) {
       setInstrumentName("");
       setBuyAmount("");
       setPrice("");
+      setPriceDirty(false);
+      setQuoteInfo(null);
+      setQuoteError(null);
       setNote("");
+      setSourceIdeaId("");
       if (side !== "CLOSE") setQuantity("1");
       router.refresh();
     } catch (err) {
@@ -398,16 +502,58 @@ export function TradeEntryForm({ portfolioId }: Props) {
         </label>
 
         <label className="text-sm">
-          <div className="mb-1 text-slate-600">Price</div>
+          <div className="mb-1 flex items-center justify-between gap-2 text-slate-600">
+            <span>Price</span>
+            <button
+              type="button"
+              onClick={() => void fetchQuote({ force: true })}
+              disabled={isQuoteLoading || !canLookupQuote}
+              className="text-xs font-medium text-slate-700 underline underline-offset-2 disabled:cursor-not-allowed disabled:text-slate-400"
+            >
+              {isQuoteLoading ? "Loading..." : "Auto Fill"}
+            </button>
+          </div>
           <input
             type="number"
             min="0"
             step="0.000001"
             value={price}
-            onChange={(e) => setPrice(e.target.value)}
+            onChange={(e) => {
+              const next = e.target.value;
+              setPrice(next);
+              setPriceDirty(next.trim().length > 0);
+            }}
             required
             className="w-full rounded-lg border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
           />
+          <p className="mt-1 text-xs text-slate-500">
+            선택한 날짜 기준 최근 종가를 자동으로 채웁니다. 오늘 날짜면 현재 시점에 가장 가까운 일봉 종가가 들어갑니다.
+          </p>
+          {quoteInfo && (
+            <p className="mt-1 text-xs text-slate-500">
+              Price source: {quoteInfo.source}
+              {quoteInfo.effectiveDate
+                ? ` (${quoteInfo.effectiveDate})`
+                : ` (on or before ${quoteInfo.requestedDate})`}
+            </p>
+          )}
+          {quoteError && <p className="mt-1 text-xs text-rose-600">{quoteError}</p>}
+        </label>
+
+        <label className="text-sm">
+          <div className="mb-1 text-slate-600">Linked Study Call (optional)</div>
+          <select
+            value={sourceIdeaId}
+            onChange={(e) => setSourceIdeaId(e.target.value)}
+            className="w-full rounded-lg border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
+          >
+            <option value="">Independent trade</option>
+            {studyCallOptions.map((option) => (
+              <option key={option.id} value={String(option.id)}>
+                {option.label}
+              </option>
+            ))}
+          </select>
         </label>
 
         <label className="text-sm">

@@ -1,21 +1,35 @@
 import {
   getBenchmarkByCode,
   getInstrumentBySymbol,
+  getParticipantsList,
   getPricePointOnOrBefore,
+  getStudyCallFeedbackRows,
+  getStudyCallUpdateRows,
+  getStudyLinkedTrades,
+  getStudySessionCompanies,
+  getStudySessions,
   getStudyTrackerIdeas,
 } from "@/lib/db";
 import { todayInSeoul } from "@/lib/time";
 import type {
+  StudyCallFeedback,
+  StudyCallUpdate,
+  StudySession,
+  StudySessionCompany,
+  StudySessionCompanyRow,
+  StudySessionData,
+  StudySessionRow,
   StudyTrackerBenchmarkCode,
   StudyTrackerData,
   StudyTrackerIdea,
   StudyTrackerIdeaRow,
+  StudyTrackerLinkedTrade,
   StudyTrackerPortfolioData,
   StudyTrackerPortfolioSummary,
   StudyTrackerSummary,
 } from "@/types/study-tracker";
 
-function toNumber(value: string | null | undefined) {
+function toNumber(value: string | number | null | undefined) {
   if (value === null || value === undefined) return null;
   const n = Number(value);
   return Number.isFinite(n) ? n : null;
@@ -40,6 +54,69 @@ export function computeStudyTrackerPortfolioReturn(idea: {
   return ratioFrom(mark, basis);
 }
 
+function sortUnique(values: Array<string | null | undefined>) {
+  return [...new Set(values.filter((v): v is string => Boolean(v?.trim())).map((v) => v.trim()))].sort(
+    (a, b) => a.localeCompare(b, "ko-KR"),
+  );
+}
+
+function average(values: number[]) {
+  if (values.length === 0) return null;
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function normalizeWeight(weight: number | null) {
+  return weight !== null && Number.isFinite(weight) && weight > 0 ? weight : 1;
+}
+
+function mapStudySessionCompany(row: StudySessionCompanyRow): StudySessionCompany {
+  return {
+    id: row.id,
+    session_id: row.session_id,
+    company_name: row.company_name,
+    ticker: row.ticker,
+    sector: row.sector ?? null,
+    session_stance: row.session_stance,
+    mention_reason: row.mention_reason ?? null,
+    follow_up_status: row.follow_up_status,
+    next_event_date: row.next_event_date ?? null,
+    note: row.note ?? null,
+    converted_call_count: 0,
+  };
+}
+
+function mapStudySession(row: StudySessionRow): StudySession {
+  return {
+    id: row.id,
+    presented_at: row.presented_at,
+    presenter: row.presenter,
+    industry_name: row.industry_name,
+    title: row.title,
+    thesis: row.thesis ?? null,
+    anti_thesis: row.anti_thesis ?? null,
+    note: row.note ?? null,
+    companies: [],
+    covered_count: 0,
+    converted_count: 0,
+    adoption_count: 0,
+  };
+}
+
+function mapLinkedTrade(row: Awaited<ReturnType<typeof getStudyLinkedTrades>>[number]): StudyTrackerLinkedTrade {
+  return {
+    id: row.id,
+    source_idea_id: row.source_idea_id,
+    participant_id: row.participant_id,
+    participant_name: row.participant_name,
+    trade_date: row.trade_date,
+    side: row.side,
+    quantity: Number(row.quantity),
+    price: Number(row.price),
+    note: row.note ?? null,
+    symbol: row.symbol ?? null,
+  };
+}
+
 export function mapStudyTrackerIdea(row: StudyTrackerIdeaRow): StudyTrackerIdea {
   const pitchPrice = toNumber(row.pitch_price);
   const targetPrice = toNumber(row.target_price);
@@ -47,19 +124,26 @@ export function mapStudyTrackerIdea(row: StudyTrackerIdeaRow): StudyTrackerIdea 
   const currentPrice = toNumber(row.current_price);
   const exitedPrice = toNumber(row.exited_price);
   const closeReturn = toNumber(row.close_return_pct);
-  const currentReturn = ratioFrom(currentPrice, pitchPrice) ?? toNumber(row.current_return_pct);
-  const currentUpside = ratioFrom(targetPrice, currentPrice) ?? toNumber(row.current_upside_pct);
-  const pitchUpside = ratioFrom(targetPrice, pitchPrice) ?? toNumber(row.pitch_upside_pct);
+  const currentReturn = ratioFrom(currentPrice, pitchPrice);
+  const currentUpside = ratioFrom(targetPrice, currentPrice);
+  const pitchUpside = ratioFrom(targetPrice, pitchPrice);
   const inferredIncluded =
     Boolean(row.is_included) ||
-    ((!row.included_at && !row.included_price && !row.position_status && !row.exited_at && !row.exited_price) &&
+    ((!row.included_at &&
+      !row.included_price &&
+      !row.position_status &&
+      !row.exited_at &&
+      !row.exited_price) &&
       (row.status === "편입" || row.status === "전량청산"));
   const positionStatus =
-    row.position_status ?? (row.status === "전량청산" ? "closed" : inferredIncluded ? "active" : null);
+    row.position_status ??
+    (row.status === "전량청산" ? "closed" : inferredIncluded ? "active" : null);
   const resolvedIncludedPrice = inferredIncluded ? includedPrice ?? pitchPrice : null;
-  const resolvedIncludedAt = inferredIncluded ? row.included_at ?? row.entry_date ?? row.presented_at : null;
-  const resolvedExitedAt = positionStatus === "closed" ? row.exited_at ?? row.exit_date ?? null : null;
-  const trackingReturn = closeReturn ?? currentReturn ?? toNumber(row.tracking_return_pct);
+  const resolvedIncludedAt = inferredIncluded
+    ? row.included_at ?? row.entry_date ?? row.presented_at
+    : null;
+  const resolvedExitedAt =
+    positionStatus === "closed" ? row.exited_at ?? row.exit_date ?? null : null;
 
   return {
     id: row.id,
@@ -84,7 +168,7 @@ export function mapStudyTrackerIdea(row: StudyTrackerIdeaRow): StudyTrackerIdea 
     exit_date: row.exit_date ?? null,
     close_return_pct: closeReturn,
     note: row.note ?? null,
-    tracking_return_pct: trackingReturn,
+    tracking_return_pct: currentReturn,
     is_included: inferredIncluded,
     included_at: resolvedIncludedAt,
     included_price: resolvedIncludedPrice,
@@ -99,22 +183,137 @@ export function mapStudyTrackerIdea(row: StudyTrackerIdeaRow): StudyTrackerIdea 
       exited_price: exitedPrice,
       position_status: positionStatus,
     }),
+    source_session_id: row.source_session_id ?? null,
+    source_coverage_id: row.source_coverage_id ?? null,
+    call_direction: row.call_direction ?? "long",
+    conviction_score: row.conviction_score ?? null,
+    invalidation_rule: row.invalidation_rule ?? null,
+    time_horizon: row.time_horizon ?? null,
+    source_session: null,
+    source_coverage: null,
+    feedbacks: [],
+    updates: [],
+    linked_trades: [],
+    feedback_count: 0,
+    update_count: 0,
+    linked_trade_count: 0,
+    adoption_count: 0,
   };
 }
 
-function sortUnique(values: Array<string | null | undefined>) {
-  return [...new Set(values.filter((v): v is string => Boolean(v?.trim())).map((v) => v.trim()))].sort(
-    (a, b) => a.localeCompare(b, "ko-KR"),
-  );
-}
+async function loadStudyTrackerContext() {
+  const [
+    ideaRows,
+    sessionRows,
+    companyRows,
+    feedbackRows,
+    updateRows,
+    linkedTradeRows,
+    participants,
+  ] = await Promise.all([
+    getStudyTrackerIdeas(),
+    getStudySessions(),
+    getStudySessionCompanies(),
+    getStudyCallFeedbackRows(),
+    getStudyCallUpdateRows(),
+    getStudyLinkedTrades(),
+    getParticipantsList(),
+  ]);
 
-function average(values: number[]) {
-  if (values.length === 0) return null;
-  return values.reduce((sum, value) => sum + value, 0) / values.length;
-}
+  const participantMap = new Map(participants.map((row) => [row.id, row.name]));
+  const sessionMap = new Map<number, StudySession>();
+  for (const row of sessionRows) {
+    sessionMap.set(row.id, mapStudySession(row));
+  }
 
-function normalizeWeight(weight: number | null) {
-  return weight !== null && Number.isFinite(weight) && weight > 0 ? weight : 1;
+  const companyMap = new Map<number, StudySessionCompany>();
+  for (const row of companyRows) {
+    const company = mapStudySessionCompany(row);
+    companyMap.set(company.id, company);
+    const session = sessionMap.get(company.session_id);
+    if (session) {
+      session.companies.push(company);
+    }
+  }
+
+  const ideas = ideaRows.map(mapStudyTrackerIdea);
+  const ideaMap = new Map(ideas.map((idea) => [idea.id, idea]));
+
+  for (const idea of ideas) {
+    if (idea.source_session_id !== null) {
+      idea.source_session = sessionMap.get(idea.source_session_id) ?? null;
+    }
+    if (idea.source_coverage_id !== null) {
+      const coverage = companyMap.get(idea.source_coverage_id) ?? null;
+      idea.source_coverage = coverage;
+      if (coverage) {
+        coverage.converted_call_count += 1;
+      }
+    }
+  }
+
+  for (const row of feedbackRows) {
+    const idea = ideaMap.get(row.idea_id);
+    if (!idea) continue;
+    const feedback: StudyCallFeedback = {
+      id: row.id,
+      participant_id: row.participant_id,
+      participant_name: participantMap.get(row.participant_id) ?? row.participant_id,
+      stance: row.stance,
+      note: row.note ?? null,
+      created_at: row.created_at,
+    };
+    idea.feedbacks.push(feedback);
+  }
+
+  for (const row of updateRows) {
+    const idea = ideaMap.get(row.idea_id);
+    if (!idea) continue;
+    const update: StudyCallUpdate = {
+      id: row.id,
+      update_type: row.update_type,
+      title: row.title ?? null,
+      body: row.body,
+      created_by: row.created_by ?? null,
+      created_at: row.created_at,
+    };
+    idea.updates.push(update);
+  }
+
+  for (const row of linkedTradeRows) {
+    const idea = ideaMap.get(row.source_idea_id);
+    if (!idea) continue;
+    idea.linked_trades.push(mapLinkedTrade(row));
+  }
+
+  for (const idea of ideas) {
+    idea.feedbacks.sort((a, b) => b.created_at.localeCompare(a.created_at));
+    idea.updates.sort((a, b) => b.created_at.localeCompare(a.created_at));
+    idea.linked_trades.sort((a, b) => b.trade_date.localeCompare(a.trade_date));
+    idea.feedback_count = idea.feedbacks.length;
+    idea.update_count = idea.updates.length;
+    idea.linked_trade_count = idea.linked_trades.length;
+    idea.adoption_count = new Set(idea.linked_trades.map((trade) => trade.participant_id)).size;
+  }
+
+  for (const session of sessionMap.values()) {
+    session.companies.sort((a, b) => a.company_name.localeCompare(b.company_name, "ko-KR"));
+    session.covered_count = session.companies.length;
+    const callsFromSession = ideas.filter((idea) => idea.source_session_id === session.id);
+    session.converted_count = callsFromSession.length;
+    session.adoption_count = new Set(
+      callsFromSession.flatMap((idea) => idea.linked_trades.map((trade) => trade.participant_id)),
+    ).size;
+  }
+
+  return {
+    ideas,
+    sessions: [...sessionMap.values()].sort((a, b) => {
+      if (a.presented_at === b.presented_at) return b.id - a.id;
+      return b.presented_at.localeCompare(a.presented_at);
+    }),
+    participants,
+  };
 }
 
 function buildSummary(ideas: StudyTrackerIdea[]): StudyTrackerSummary {
@@ -128,6 +327,8 @@ function buildSummary(ideas: StudyTrackerIdea[]): StudyTrackerSummary {
         (b.tracking_return_pct ?? Number.NEGATIVE_INFINITY) -
         (a.tracking_return_pct ?? Number.NEGATIVE_INFINITY),
     );
+  const mostFollowedCall = [...ideas].sort((a, b) => b.adoption_count - a.adoption_count)[0] ?? null;
+  const mostDiscussedCall = [...ideas].sort((a, b) => b.feedback_count - a.feedback_count)[0] ?? null;
 
   return {
     totalIdeas: ideas.length,
@@ -136,6 +337,10 @@ function buildSummary(ideas: StudyTrackerIdea[]): StudyTrackerSummary {
     avgTrackingReturnPct: average(trackingReturns),
     bestIdea: sortedByReturn[0] ?? null,
     worstIdea: sortedByReturn.at(-1) ?? null,
+    adoptedCalls: ideas.filter((idea) => idea.adoption_count > 0).length,
+    mostFollowedCall,
+    mostDiscussedCall,
+    callsFromSessions: ideas.filter((idea) => idea.source_session_id !== null).length,
   };
 }
 
@@ -173,17 +378,47 @@ function buildPortfolioSummary(ideas: StudyTrackerIdea[]): StudyTrackerPortfolio
   };
 }
 
+function buildSessionSummary(sessions: StudySessionData["sessions"]): StudySessionData["summary"] {
+  const sortedByConversion = [...sessions].sort((a, b) => b.converted_count - a.converted_count);
+  return {
+    totalSessions: sessions.length,
+    totalCoveredCompanies: sessions.reduce((sum, session) => sum + session.covered_count, 0),
+    totalConvertedCalls: sessions.reduce((sum, session) => sum + session.converted_count, 0),
+    topSessionByConversion: sortedByConversion[0] ?? null,
+  };
+}
+
 export async function fetchStudyTrackerData(): Promise<StudyTrackerData> {
-  const rows = await getStudyTrackerIdeas();
-  const ideas = rows.map(mapStudyTrackerIdea);
+  const { ideas, participants } = await loadStudyTrackerContext();
 
   return {
     ideas,
     statuses: sortUnique(ideas.map((idea) => idea.status)),
     sectors: sortUnique(ideas.map((idea) => idea.sector)),
     styles: sortUnique(ideas.map((idea) => idea.style)),
+    presenters: sortUnique(ideas.map((idea) => idea.presenter)),
+    participants,
     summary: buildSummary(ideas),
   };
+}
+
+export async function fetchStudySessionData(): Promise<StudySessionData> {
+  const { sessions, participants } = await loadStudyTrackerContext();
+  return {
+    sessions,
+    participants,
+    summary: buildSessionSummary(sessions),
+  };
+}
+
+export async function fetchStudyTrackerCallOptions() {
+  const rows = await getStudyTrackerIdeas();
+  return rows.map((row) => ({
+    id: row.id,
+    label: [row.ticker, row.company_name, row.presenter, row.presented_at]
+      .filter(Boolean)
+      .join(" | "),
+  }));
 }
 
 const BENCHMARK_LABELS: Record<StudyTrackerBenchmarkCode, string> = {
@@ -231,11 +466,11 @@ export async function fetchStudyTrackerPortfolioData(options?: {
   toDate?: string;
   benchmark?: StudyTrackerBenchmarkCode;
 }): Promise<StudyTrackerPortfolioData> {
-  const rows = await getStudyTrackerIdeas();
-  const allIdeas = rows.map(mapStudyTrackerIdea).filter((idea) => idea.is_included);
-  const period = determinePeriod(allIdeas, options?.fromDate, options?.toDate);
+  const { ideas: allIdeas } = await loadStudyTrackerContext();
+  const includedIdeas = allIdeas.filter((idea) => idea.is_included);
+  const period = determinePeriod(includedIdeas, options?.fromDate, options?.toDate);
   const benchmark = options?.benchmark ?? "SPY";
-  const ideas = allIdeas.filter((idea) => {
+  const ideas = includedIdeas.filter((idea) => {
     if (!idea.included_at) return true;
     return idea.included_at >= period.from && idea.included_at <= period.to;
   });

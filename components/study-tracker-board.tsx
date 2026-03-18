@@ -1,9 +1,16 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { formatPct } from "@/lib/format";
-import type { StudyTrackerData, StudyTrackerIdea, StudyTrackerIdeaInput } from "@/types/study-tracker";
+import type {
+  StudyCallDirection,
+  StudyCallFeedbackStance,
+  StudyCallUpdateType,
+  StudyTrackerData,
+  StudyTrackerIdea,
+  StudyTrackerIdeaInput,
+} from "@/types/study-tracker";
 
 const DEFAULT_STATUS_OPTIONS = ["검토중", "보류", "편입", "전량청산"];
 const DEFAULT_SECTOR_OPTIONS = [
@@ -28,7 +35,33 @@ const DEFAULT_STYLE_OPTIONS = [
   "가치주",
   "자산주",
 ];
+const CALL_DIRECTION_OPTIONS: Array<{ value: StudyCallDirection; label: string }> = [
+  { value: "long", label: "Long" },
+  { value: "watch", label: "Watch" },
+  { value: "avoid", label: "Avoid" },
+];
 const POSITION_STATUS_OPTIONS = ["active", "closed"] as const;
+const FEEDBACK_STANCE_OPTIONS: Array<{ value: StudyCallFeedbackStance; label: string }> = [
+  { value: "agree", label: "Agree" },
+  { value: "neutral", label: "Neutral" },
+  { value: "disagree", label: "Disagree" },
+];
+const UPDATE_TYPE_OPTIONS: Array<{ value: StudyCallUpdateType; label: string }> = [
+  { value: "update", label: "Update" },
+  { value: "catalyst", label: "Catalyst" },
+  { value: "risk", label: "Risk" },
+  { value: "postmortem", label: "Postmortem" },
+];
+
+type ComposerPrefill = Partial<StudyTrackerIdeaInput> & {
+  sourceSessionLabel?: string;
+  sourceCoverageLabel?: string;
+};
+
+type Props = {
+  data: StudyTrackerData;
+  initialComposer?: ComposerPrefill | null;
+};
 
 type Draft = {
   presented_at: string;
@@ -36,23 +69,15 @@ type Draft = {
   company_name: string;
   ticker: string;
   sector: string;
+  currency: "" | "KRW" | "USD";
   pitch_price: string;
   target_price: string;
-  pitch_upside_pct: string;
-  currency: "" | "KRW" | "USD";
-  current_price: string;
-  current_upside_pct: string;
-  current_return_pct: string;
   thesis: string;
   trigger: string;
   risk: string;
   style: string;
   status: string;
-  entry_date: string;
-  exit_date: string;
-  close_return_pct: string;
   note: string;
-  tracking_return_pct: string;
   is_included: boolean;
   included_at: string;
   included_price: string;
@@ -60,7 +85,25 @@ type Draft = {
   position_status: "" | "active" | "closed";
   exited_at: string;
   exited_price: string;
+  source_session_id: string;
+  source_coverage_id: string;
+  call_direction: StudyCallDirection;
+  conviction_score: string;
+  invalidation_rule: string;
+  time_horizon: string;
 };
+
+type SortKey =
+  | "company_name"
+  | "presented_at"
+  | "presenter"
+  | "call_direction"
+  | "status"
+  | "tracking_return_pct"
+  | "adoption_count"
+  | "feedback_count";
+
+type SortDirection = "asc" | "desc";
 
 type ApiResponse = {
   ok?: boolean;
@@ -69,47 +112,43 @@ type ApiResponse = {
   warning?: string;
 };
 
-type SortKey =
-  | "presented_at"
-  | "company_name"
-  | "presenter"
-  | "status"
-  | "tracking_return_pct"
-  | "current_upside_pct";
+function todayLocalIsoDate() {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
 
-type SortDirection = "asc" | "desc";
-
-function emptyDraft(): Draft {
+function emptyDraft(prefill?: ComposerPrefill | null): Draft {
   return {
-    presented_at: "",
-    presenter: "",
-    company_name: "",
-    ticker: "",
-    sector: "",
-    pitch_price: "",
-    target_price: "",
-    pitch_upside_pct: "",
-    currency: "",
-    current_price: "",
-    current_upside_pct: "",
-    current_return_pct: "",
-    thesis: "",
-    trigger: "",
-    risk: "",
-    style: "",
-    status: "검토중",
-    entry_date: "",
-    exit_date: "",
-    close_return_pct: "",
-    note: "",
-    tracking_return_pct: "",
-    is_included: false,
-    included_at: "",
-    included_price: "",
-    weight: "",
-    position_status: "",
-    exited_at: "",
-    exited_price: "",
+    presented_at: prefill?.presented_at ?? "",
+    presenter: prefill?.presenter ?? "",
+    company_name: prefill?.company_name ?? "",
+    ticker: prefill?.ticker ?? "",
+    sector: prefill?.sector ?? "",
+    currency: prefill?.currency ?? "",
+    pitch_price: prefill?.pitch_price?.toString() ?? "",
+    target_price: prefill?.target_price?.toString() ?? "",
+    thesis: prefill?.thesis ?? "",
+    trigger: prefill?.trigger ?? "",
+    risk: prefill?.risk ?? "",
+    style: prefill?.style ?? "",
+    status: prefill?.status ?? "검토중",
+    note: prefill?.note ?? "",
+    is_included: Boolean(prefill?.is_included),
+    included_at: prefill?.included_at ?? "",
+    included_price: prefill?.included_price?.toString() ?? "",
+    weight: prefill?.weight?.toString() ?? "",
+    position_status: prefill?.position_status ?? "",
+    exited_at: prefill?.exited_at ?? "",
+    exited_price: prefill?.exited_price?.toString() ?? "",
+    source_session_id: prefill?.source_session_id ? String(prefill.source_session_id) : "",
+    source_coverage_id: prefill?.source_coverage_id ? String(prefill.source_coverage_id) : "",
+    call_direction: prefill?.call_direction ?? "long",
+    conviction_score: prefill?.conviction_score?.toString() ?? "",
+    invalidation_rule: prefill?.invalidation_rule ?? "",
+    time_horizon: prefill?.time_horizon ?? "",
   };
 }
 
@@ -120,23 +159,15 @@ function ideaToDraft(idea: StudyTrackerIdea): Draft {
     company_name: idea.company_name,
     ticker: idea.ticker,
     sector: idea.sector ?? "",
+    currency: idea.currency ?? "",
     pitch_price: idea.pitch_price?.toString() ?? "",
     target_price: idea.target_price?.toString() ?? "",
-    pitch_upside_pct: idea.pitch_upside_pct?.toString() ?? "",
-    currency: idea.currency ?? "",
-    current_price: idea.current_price?.toString() ?? "",
-    current_upside_pct: idea.current_upside_pct?.toString() ?? "",
-    current_return_pct: idea.current_return_pct?.toString() ?? "",
     thesis: idea.thesis ?? "",
     trigger: idea.trigger ?? "",
     risk: idea.risk ?? "",
     style: idea.style ?? "",
     status: idea.status ?? "검토중",
-    entry_date: idea.entry_date ?? "",
-    exit_date: idea.exit_date ?? "",
-    close_return_pct: idea.close_return_pct?.toString() ?? "",
     note: idea.note ?? "",
-    tracking_return_pct: idea.tracking_return_pct?.toString() ?? "",
     is_included: idea.is_included,
     included_at: idea.included_at ?? "",
     included_price: idea.included_price?.toString() ?? "",
@@ -144,6 +175,12 @@ function ideaToDraft(idea: StudyTrackerIdea): Draft {
     position_status: idea.position_status ?? "",
     exited_at: idea.exited_at ?? "",
     exited_price: idea.exited_price?.toString() ?? "",
+    source_session_id: idea.source_session_id ? String(idea.source_session_id) : "",
+    source_coverage_id: idea.source_coverage_id ? String(idea.source_coverage_id) : "",
+    call_direction: idea.call_direction,
+    conviction_score: idea.conviction_score?.toString() ?? "",
+    invalidation_rule: idea.invalidation_rule ?? "",
+    time_horizon: idea.time_horizon ?? "",
   };
 }
 
@@ -154,7 +191,21 @@ function parseOptionalNumber(value: string) {
   return Number.isFinite(num) ? num : NaN;
 }
 
-function toPayload(draft: Draft): StudyTrackerIdeaInput {
+function parseOptionalInt(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const num = Number(trimmed);
+  return Number.isInteger(num) ? num : NaN;
+}
+
+function normalizeId(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const id = Number(trimmed);
+  return Number.isInteger(id) && id > 0 ? id : NaN;
+}
+
+function toPayload(draft: Draft, existing?: StudyTrackerIdea | null): StudyTrackerIdeaInput {
   return {
     presented_at: draft.presented_at.trim() || null,
     presenter: draft.presenter,
@@ -163,21 +214,21 @@ function toPayload(draft: Draft): StudyTrackerIdeaInput {
     sector: draft.sector.trim() || null,
     pitch_price: parseOptionalNumber(draft.pitch_price),
     target_price: parseOptionalNumber(draft.target_price),
-    pitch_upside_pct: parseOptionalNumber(draft.pitch_upside_pct),
+    pitch_upside_pct: existing?.pitch_upside_pct ?? null,
     currency: draft.currency || null,
-    current_price: parseOptionalNumber(draft.current_price),
-    current_upside_pct: parseOptionalNumber(draft.current_upside_pct),
-    current_return_pct: parseOptionalNumber(draft.current_return_pct),
+    current_price: existing?.current_price ?? null,
+    current_upside_pct: existing?.current_upside_pct ?? null,
+    current_return_pct: existing?.current_return_pct ?? null,
     thesis: draft.thesis.trim() || null,
     trigger: draft.trigger.trim() || null,
     risk: draft.risk.trim() || null,
     style: draft.style.trim() || null,
     status: draft.status.trim() || null,
-    entry_date: draft.entry_date.trim() || null,
-    exit_date: draft.exit_date.trim() || null,
-    close_return_pct: parseOptionalNumber(draft.close_return_pct),
+    entry_date: existing?.entry_date ?? null,
+    exit_date: existing?.exit_date ?? null,
+    close_return_pct: existing?.close_return_pct ?? null,
     note: draft.note.trim() || null,
-    tracking_return_pct: parseOptionalNumber(draft.tracking_return_pct),
+    tracking_return_pct: existing?.tracking_return_pct ?? null,
     is_included: draft.is_included,
     included_at: draft.is_included ? draft.included_at.trim() || null : null,
     included_price: draft.is_included ? parseOptionalNumber(draft.included_price) : null,
@@ -185,41 +236,12 @@ function toPayload(draft: Draft): StudyTrackerIdeaInput {
     position_status: draft.is_included ? draft.position_status || "active" : null,
     exited_at: draft.is_included ? draft.exited_at.trim() || null : null,
     exited_price: draft.is_included ? parseOptionalNumber(draft.exited_price) : null,
-  };
-}
-
-function ideaToPayload(idea: StudyTrackerIdea, overrides?: Partial<StudyTrackerIdeaInput>): StudyTrackerIdeaInput {
-  return {
-    presented_at: idea.presented_at,
-    presenter: idea.presenter,
-    company_name: idea.company_name,
-    ticker: idea.ticker,
-    sector: idea.sector,
-    pitch_price: idea.pitch_price,
-    target_price: idea.target_price,
-    pitch_upside_pct: idea.pitch_upside_pct,
-    currency: idea.currency,
-    current_price: idea.current_price,
-    current_upside_pct: idea.current_upside_pct,
-    current_return_pct: idea.current_return_pct,
-    thesis: idea.thesis,
-    trigger: idea.trigger,
-    risk: idea.risk,
-    style: idea.style,
-    status: idea.status,
-    entry_date: idea.entry_date,
-    exit_date: idea.exit_date,
-    close_return_pct: idea.close_return_pct,
-    note: idea.note,
-    tracking_return_pct: idea.tracking_return_pct,
-    is_included: idea.is_included,
-    included_at: idea.included_at,
-    included_price: idea.included_price,
-    weight: idea.weight,
-    position_status: idea.position_status,
-    exited_at: idea.exited_at,
-    exited_price: idea.exited_price,
-    ...overrides,
+    source_session_id: normalizeId(draft.source_session_id),
+    source_coverage_id: normalizeId(draft.source_coverage_id),
+    call_direction: draft.call_direction,
+    conviction_score: parseOptionalInt(draft.conviction_score),
+    invalidation_rule: draft.invalidation_rule.trim() || null,
+    time_horizon: draft.time_horizon.trim() || null,
   };
 }
 
@@ -257,28 +279,14 @@ function summarizeIdea(idea: StudyTrackerIdea) {
   return candidate.length > 88 ? `${candidate.slice(0, 88)}...` : candidate;
 }
 
-function describeCurrentPriceSource(idea: StudyTrackerIdea) {
-  if (idea.current_price === null) {
-    return "저장된 현재가가 없습니다. '현재가 새로고침'을 눌러 실제 시세를 다시 가져올 수 있습니다.";
-  }
-  return "현재가는 저장된 시장 데이터입니다. 수정/저장 또는 '현재가 새로고침' 시 provider에서 다시 조회합니다.";
+function compareNullableString(a: string | null | undefined, b: string | null | undefined) {
+  return (a ?? "").localeCompare(b ?? "", "ko-KR");
 }
 
-function describeTrackingFormula(idea: StudyTrackerIdea) {
-  if (idea.close_return_pct !== null) {
-    return `Close Return 우선 적용: ${formatPct(idea.close_return_pct)}`;
-  }
-  if (idea.current_price !== null && idea.pitch_price !== null && idea.pitch_price > 0) {
-    return `${formatPrice(idea.current_price, idea.currency)} / ${formatPrice(idea.pitch_price, idea.currency)} - 1 = ${formatPct(
-      idea.tracking_return_pct,
-    )}`;
-  }
-  return "발표가와 현재가가 있어야 Tracking Return을 계산할 수 있습니다.";
-}
-
-function average(values: number[]) {
-  if (values.length === 0) return null;
-  return values.reduce((sum, value) => sum + value, 0) / values.length;
+function compareNullableNumber(a: number | null | undefined, b: number | null | undefined) {
+  const av = a ?? Number.NEGATIVE_INFINITY;
+  const bv = b ?? Number.NEGATIVE_INFINITY;
+  return av - bv;
 }
 
 function sortUnique(values: Array<string | null | undefined>) {
@@ -299,72 +307,73 @@ function mergeOptions(defaults: string[], dynamicValues: Array<string | null | u
 }
 
 function buildSummary(ideas: StudyTrackerIdea[]) {
-  const trackingReturns = ideas
-    .map((idea) => idea.tracking_return_pct)
-    .filter((value): value is number => value !== null);
-  const sortedByReturn = [...ideas]
-    .filter((idea) => idea.tracking_return_pct !== null)
-    .sort(
-      (a, b) =>
-        (b.tracking_return_pct ?? Number.NEGATIVE_INFINITY) -
-        (a.tracking_return_pct ?? Number.NEGATIVE_INFINITY),
-    );
-
+  const mostFollowed = [...ideas].sort((a, b) => b.adoption_count - a.adoption_count)[0] ?? null;
+  const mostDiscussed = [...ideas].sort((a, b) => b.feedback_count - a.feedback_count)[0] ?? null;
   return {
-    totalIdeas: ideas.length,
-    activeIdeas: ideas.filter((idea) => idea.status === "편입" || idea.status === "검토중").length,
-    closedIdeas: ideas.filter((idea) => idea.status === "전량청산").length,
-    avgTrackingReturnPct: average(trackingReturns),
-    bestIdea: sortedByReturn[0] ?? null,
-    worstIdea: sortedByReturn.at(-1) ?? null,
+    totalCalls: ideas.length,
+    adoptedCalls: ideas.filter((idea) => idea.adoption_count > 0).length,
+    callsFromSessions: ideas.filter((idea) => idea.source_session_id !== null).length,
+    mostFollowed,
+    mostDiscussed,
   };
-}
-
-function compareNullableString(a: string | null | undefined, b: string | null | undefined) {
-  return (a ?? "").localeCompare(b ?? "", "ko-KR");
-}
-
-function compareNullableNumber(a: number | null | undefined, b: number | null | undefined) {
-  const av = a ?? Number.NEGATIVE_INFINITY;
-  const bv = b ?? Number.NEGATIVE_INFINITY;
-  return av - bv;
 }
 
 function compareIdeas(a: StudyTrackerIdea, b: StudyTrackerIdea, key: SortKey) {
   switch (key) {
-    case "presented_at":
-      return compareNullableString(a.presented_at, b.presented_at);
     case "company_name":
       return compareNullableString(a.company_name, b.company_name);
+    case "presented_at":
+      return compareNullableString(a.presented_at, b.presented_at);
     case "presenter":
       return compareNullableString(a.presenter, b.presenter);
+    case "call_direction":
+      return compareNullableString(a.call_direction, b.call_direction);
     case "status":
       return compareNullableString(a.status, b.status);
     case "tracking_return_pct":
       return compareNullableNumber(a.tracking_return_pct, b.tracking_return_pct);
-    case "current_upside_pct":
-      return compareNullableNumber(a.current_upside_pct, b.current_upside_pct);
+    case "adoption_count":
+      return compareNullableNumber(a.adoption_count, b.adoption_count);
+    case "feedback_count":
+      return compareNullableNumber(a.feedback_count, b.feedback_count);
     default:
       return 0;
   }
 }
 
-async function readApiResponse(res: Response): Promise<ApiResponse> {
+async function readApiResponse<T>(res: Response): Promise<T> {
   const contentType = res.headers.get("content-type") ?? "";
   if (!contentType.includes("application/json")) {
     const text = await res.text();
-    return { ok: false, error: text?.trim() || `HTTP ${res.status}` };
+    throw new Error(text?.trim() || `HTTP ${res.status}`);
   }
-  return (await res.json()) as ApiResponse;
+  return (await res.json()) as T;
 }
 
-export function StudyTrackerBoard({ data }: { data: StudyTrackerData }) {
+function describeCurrentPriceSource(idea: StudyTrackerIdea) {
+  if (idea.current_price === null) {
+    return "저장된 현재가가 없습니다. '현재가 새로고침'으로 실제 시세를 다시 조회할 수 있습니다.";
+  }
+  return "현재가는 저장된 시장 데이터입니다. 저장 또는 '현재가 새로고침' 시 provider에서 다시 조회합니다.";
+}
+
+function describeTrackingFormula(idea: StudyTrackerIdea) {
+  if (idea.current_price !== null && idea.pitch_price !== null && idea.pitch_price > 0) {
+    return `${formatPrice(idea.current_price, idea.currency)} / ${formatPrice(idea.pitch_price, idea.currency)} - 1 = ${formatPct(
+      idea.tracking_return_pct,
+    )}`;
+  }
+  return "Tracking Return은 항상 현재가 기준(current / pitch - 1)으로 계산합니다.";
+}
+
+export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
   const router = useRouter();
+  const prefillConsumedRef = useRef(false);
   const [ideas, setIdeas] = useState(data.ideas);
   const [search, setSearch] = useState("");
+  const [presenterFilter, setPresenterFilter] = useState("ALL");
   const [statusFilter, setStatusFilter] = useState("ALL");
-  const [sectorFilter, setSectorFilter] = useState("ALL");
-  const [styleFilter, setStyleFilter] = useState("ALL");
+  const [directionFilter, setDirectionFilter] = useState<"ALL" | StudyCallDirection>("ALL");
   const [includedFilter, setIncludedFilter] = useState<"ALL" | "INCLUDED" | "EXCLUDED">("ALL");
   const [sortKey, setSortKey] = useState<SortKey>("tracking_return_pct");
   const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
@@ -372,12 +381,43 @@ export function StudyTrackerBoard({ data }: { data: StudyTrackerData }) {
   const [menuIdeaId, setMenuIdeaId] = useState<number | null>(null);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [composerOpen, setComposerOpen] = useState(false);
-  const [draft, setDraft] = useState<Draft>(emptyDraft);
+  const [draft, setDraft] = useState<Draft>(emptyDraft(initialComposer));
   const [isSaving, setIsSaving] = useState(false);
   const [isRefreshingQuotes, setIsRefreshingQuotes] = useState(false);
   const [busyId, setBusyId] = useState<number | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [feedbackParticipantId, setFeedbackParticipantId] = useState(data.participants[0]?.id ?? "");
+  const [feedbackStance, setFeedbackStance] = useState<StudyCallFeedbackStance>("agree");
+  const [feedbackNote, setFeedbackNote] = useState("");
+  const [updateType, setUpdateType] = useState<StudyCallUpdateType>("update");
+  const [updateTitle, setUpdateTitle] = useState("");
+  const [updateBody, setUpdateBody] = useState("");
+  const [updateAuthor, setUpdateAuthor] = useState("");
+
+  useEffect(() => {
+    setIdeas(data.ideas);
+    if (!feedbackParticipantId && data.participants[0]?.id) {
+      setFeedbackParticipantId(data.participants[0].id);
+    }
+  }, [data.ideas, data.participants, feedbackParticipantId]);
+
+  useEffect(() => {
+    if (!initialComposer || prefillConsumedRef.current) return;
+    prefillConsumedRef.current = true;
+    setComposerOpen(true);
+    setEditingId(null);
+    setDraft(emptyDraft(initialComposer));
+    router.replace("/study-tracker", { scroll: false });
+  }, [initialComposer, router]);
+
+  useEffect(() => {
+    if (!selectedIdeaId) return;
+    const stillExists = data.ideas.some((idea) => idea.id === selectedIdeaId);
+    if (!stillExists) {
+      setSelectedIdeaId(null);
+    }
+  }, [data.ideas, selectedIdeaId]);
 
   const summary = useMemo(() => buildSummary(ideas), [ideas]);
   const statuses = useMemo(
@@ -392,46 +432,53 @@ export function StudyTrackerBoard({ data }: { data: StudyTrackerData }) {
     () => mergeOptions(DEFAULT_STYLE_OPTIONS, ideas.map((idea) => idea.style)),
     [ideas],
   );
-  const presenters = useMemo(() => sortUnique(ideas.map((idea) => idea.presenter)), [ideas]);
+  const presenters = useMemo(
+    () => sortUnique(ideas.map((idea) => idea.presenter)),
+    [ideas],
+  );
 
-  const filtered = useMemo(() => {
+  const filteredIdeas = useMemo(() => {
     const q = search.trim().toLowerCase();
     return ideas.filter((idea) => {
+      if (presenterFilter !== "ALL" && idea.presenter !== presenterFilter) return false;
       if (statusFilter !== "ALL" && idea.status !== statusFilter) return false;
-      if (sectorFilter !== "ALL" && idea.sector !== sectorFilter) return false;
-      if (styleFilter !== "ALL" && idea.style !== styleFilter) return false;
+      if (directionFilter !== "ALL" && idea.call_direction !== directionFilter) return false;
       if (includedFilter === "INCLUDED" && !idea.is_included) return false;
       if (includedFilter === "EXCLUDED" && idea.is_included) return false;
       if (!q) return true;
-
       return [
         idea.presenter,
         idea.company_name,
         idea.ticker,
         idea.sector,
         idea.thesis,
+        idea.note,
         idea.trigger,
         idea.risk,
-        idea.note,
       ]
         .filter((value): value is string => Boolean(value))
         .some((value) => value.toLowerCase().includes(q));
     });
-  }, [ideas, includedFilter, search, statusFilter, sectorFilter, styleFilter]);
+  }, [ideas, presenterFilter, statusFilter, directionFilter, includedFilter, search]);
 
   const sortedIdeas = useMemo(() => {
-    const items = [...filtered];
+    const items = [...filteredIdeas];
     items.sort((a, b) => {
       const result = compareIdeas(a, b, sortKey);
       return sortDirection === "asc" ? result : -result;
     });
     return items;
-  }, [filtered, sortDirection, sortKey]);
+  }, [filteredIdeas, sortDirection, sortKey]);
 
   const selectedIdea = useMemo(
     () => ideas.find((idea) => idea.id === selectedIdeaId) ?? null,
     [ideas, selectedIdeaId],
   );
+
+  const selectedSourceLabel = useMemo(() => {
+    if (!selectedIdea?.source_session) return null;
+    return `${selectedIdea.source_session.industry_name} · ${selectedIdea.source_session.presenter}`;
+  }, [selectedIdea]);
 
   function updateDraft<K extends keyof Draft>(key: K, value: Draft[K]) {
     setDraft((prev) => ({ ...prev, [key]: value }));
@@ -444,10 +491,10 @@ export function StudyTrackerBoard({ data }: { data: StudyTrackerData }) {
     setError(null);
   }
 
-  function openComposerForCreate() {
+  function openComposerForCreate(prefill?: ComposerPrefill | null) {
     setEditingId(null);
     setComposerOpen(true);
-    setDraft(emptyDraft());
+    setDraft(emptyDraft(prefill));
     setError(null);
     setMessage(null);
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -469,12 +516,16 @@ export function StudyTrackerBoard({ data }: { data: StudyTrackerData }) {
       return;
     }
     setSortKey(nextKey);
-    setSortDirection(nextKey === "tracking_return_pct" || nextKey === "current_upside_pct" ? "desc" : "asc");
+    setSortDirection(
+      nextKey === "tracking_return_pct" || nextKey === "adoption_count" || nextKey === "feedback_count"
+        ? "desc"
+        : "asc",
+    );
   }
 
   async function patchIdea(
     idea: StudyTrackerIdea,
-    overrides: Partial<StudyTrackerIdeaInput>,
+    payload: StudyTrackerIdeaInput,
     successMessage: string,
   ) {
     setBusyId(idea.id);
@@ -485,9 +536,9 @@ export function StudyTrackerBoard({ data }: { data: StudyTrackerData }) {
       const res = await fetch(`/api/study-tracker/ideas/${idea.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(ideaToPayload(idea, overrides)),
+        body: JSON.stringify(payload),
       });
-      const json = await readApiResponse(res);
+      const json = await readApiResponse<ApiResponse>(res);
       if (!res.ok || !json.ok || !json.idea) {
         throw new Error(json.error ?? `Failed to update idea (HTTP ${res.status})`);
       }
@@ -516,9 +567,9 @@ export function StudyTrackerBoard({ data }: { data: StudyTrackerData }) {
         const res = await fetch(`/api/study-tracker/ideas/${idea.id}`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(ideaToPayload(idea)),
+          body: JSON.stringify(toPayload(ideaToDraft(idea), idea)),
         });
-        const json = await readApiResponse(res);
+        const json = await readApiResponse<ApiResponse>(res);
         if (!res.ok || !json.ok || !json.idea) {
           throw new Error(json.error ?? `Failed to refresh idea (HTTP ${res.status})`);
         }
@@ -542,8 +593,9 @@ export function StudyTrackerBoard({ data }: { data: StudyTrackerData }) {
     await patchIdea(
       idea,
       {
+        ...toPayload(ideaToDraft(idea), idea),
         is_included: true,
-        included_at: idea.included_at ?? idea.entry_date ?? idea.presented_at ?? null,
+        included_at: idea.included_at ?? idea.presented_at ?? todayLocalIsoDate(),
         included_price: idea.included_price ?? idea.current_price ?? idea.pitch_price ?? null,
         position_status: idea.position_status ?? "active",
         exited_at: null,
@@ -558,6 +610,7 @@ export function StudyTrackerBoard({ data }: { data: StudyTrackerData }) {
     await patchIdea(
       idea,
       {
+        ...toPayload(ideaToDraft(idea), idea),
         is_included: false,
         included_at: null,
         included_price: null,
@@ -574,9 +627,10 @@ export function StudyTrackerBoard({ data }: { data: StudyTrackerData }) {
     await patchIdea(
       idea,
       {
+        ...toPayload(ideaToDraft(idea), idea),
         is_included: true,
         position_status: "closed",
-        exited_at: idea.exited_at ?? idea.exit_date ?? null,
+        exited_at: idea.exited_at ?? todayLocalIsoDate(),
         exited_price: idea.exited_price ?? idea.current_price ?? null,
       },
       "Position closed.",
@@ -587,6 +641,7 @@ export function StudyTrackerBoard({ data }: { data: StudyTrackerData }) {
     await patchIdea(
       idea,
       {
+        ...toPayload(ideaToDraft(idea), idea),
         is_included: true,
         position_status: "active",
         exited_at: null,
@@ -606,7 +661,8 @@ export function StudyTrackerBoard({ data }: { data: StudyTrackerData }) {
     setError(null);
 
     try {
-      const payload = toPayload(draft);
+      const existing = editingId === null ? null : ideas.find((idea) => idea.id === editingId) ?? null;
+      const payload = toPayload(draft, existing);
       const method = editingId === null ? "POST" : "PATCH";
       const url = editingId === null ? "/api/study-tracker/ideas" : `/api/study-tracker/ideas/${editingId}`;
       const res = await fetch(url, {
@@ -614,26 +670,20 @@ export function StudyTrackerBoard({ data }: { data: StudyTrackerData }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
-      const json = await readApiResponse(res);
+      const json = await readApiResponse<ApiResponse>(res);
       if (!res.ok || !json.ok || !json.idea) {
         throw new Error(json.error ?? `Failed to save idea (HTTP ${res.status})`);
       }
-
       setIdeas((prev) => {
-        if (editingId === null) {
-          return [json.idea!, ...prev];
-        }
+        if (editingId === null) return [json.idea!, ...prev];
         return prev.map((idea) => (idea.id === json.idea!.id ? json.idea! : idea));
       });
       setSelectedIdeaId(json.idea.id);
-      const baseMessage = editingId === null ? "Idea added." : "Idea updated.";
-      setMessage(json.warning ? `${baseMessage} ${json.warning}` : baseMessage);
-      setEditingId(null);
-      setComposerOpen(false);
-      setDraft(emptyDraft());
+      setMessage(json.warning ? `Call saved. ${json.warning}` : editingId === null ? "Call added." : "Call updated.");
+      closeComposer();
       router.refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to save idea");
+      setError(err instanceof Error ? err.message : "Failed to save call");
     } finally {
       setIsSaving(false);
     }
@@ -649,41 +699,103 @@ export function StudyTrackerBoard({ data }: { data: StudyTrackerData }) {
       const res = await fetch(`/api/study-tracker/ideas/${idea.id}`, {
         method: "DELETE",
       });
-      const json = await readApiResponse(res);
+      const json = await readApiResponse<{ ok?: boolean; error?: string }>(res);
       if (!res.ok || !json.ok) {
-        throw new Error(json.error ?? `Failed to delete idea (HTTP ${res.status})`);
+        throw new Error(json.error ?? `Failed to delete call (HTTP ${res.status})`);
       }
       setIdeas((prev) => prev.filter((row) => row.id !== idea.id));
-      if (editingId === idea.id) {
-        closeComposer();
-      }
-      if (selectedIdeaId === idea.id) {
-        setSelectedIdeaId(null);
-      }
+      if (selectedIdeaId === idea.id) setSelectedIdeaId(null);
+      if (editingId === idea.id) closeComposer();
       setMenuIdeaId(null);
-      setMessage("Idea deleted.");
+      setMessage("Call deleted.");
       router.refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to delete idea");
+      setError(err instanceof Error ? err.message : "Failed to delete call");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function submitFeedback() {
+    if (!selectedIdea) return;
+    setBusyId(selectedIdea.id);
+    setMessage(null);
+    setError(null);
+
+    try {
+      const res = await fetch(`/api/study-tracker/ideas/${selectedIdea.id}/feedback`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          participant_id: feedbackParticipantId,
+          stance: feedbackStance,
+          note: feedbackNote.trim() || null,
+        }),
+      });
+      const json = await readApiResponse<{ ok?: boolean; error?: string }>(res);
+      if (!res.ok || !json.ok) {
+        throw new Error(json.error ?? `Failed to save feedback (HTTP ${res.status})`);
+      }
+      setFeedbackNote("");
+      setMessage("Feedback saved.");
+      router.refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save feedback");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function submitUpdate() {
+    if (!selectedIdea) return;
+    setBusyId(selectedIdea.id);
+    setMessage(null);
+    setError(null);
+
+    try {
+      const res = await fetch(`/api/study-tracker/ideas/${selectedIdea.id}/updates`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          update_type: updateType,
+          title: updateTitle.trim() || null,
+          body: updateBody,
+          created_by: updateAuthor.trim() || null,
+        }),
+      });
+      const json = await readApiResponse<{ ok?: boolean; error?: string }>(res);
+      if (!res.ok || !json.ok) {
+        throw new Error(json.error ?? `Failed to save update (HTTP ${res.status})`);
+      }
+      setUpdateType("update");
+      setUpdateTitle("");
+      setUpdateBody("");
+      setUpdateAuthor("");
+      setMessage("Update saved.");
+      router.refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save update");
     } finally {
       setBusyId(null);
     }
   }
 
   const cards = [
-    { title: "Total", value: String(summary.totalIdeas), tone: "text-slate-900" },
-    { title: "Active", value: String(summary.activeIdeas), tone: "text-slate-900" },
-    { title: "Closed", value: String(summary.closedIdeas), tone: "text-slate-900" },
+    { title: "Total Calls", value: String(summary.totalCalls), tone: "text-slate-900" },
+    { title: "Adopted Calls", value: String(summary.adoptedCalls), tone: "text-slate-900" },
+    { title: "From Sessions", value: String(summary.callsFromSessions), tone: "text-slate-900" },
     {
-      title: "Avg Return",
-      value: formatPct(summary.avgTrackingReturnPct),
-      tone: toneClass(summary.avgTrackingReturnPct),
+      title: "Most Followed",
+      value: summary.mostFollowed ? `${summary.mostFollowed.ticker} · ${summary.mostFollowed.adoption_count}` : "-",
+      tone: "text-slate-900",
+    },
+    {
+      title: "Most Discussed",
+      value: summary.mostDiscussed ? `${summary.mostDiscussed.ticker} · ${summary.mostDiscussed.feedback_count}` : "-",
+      tone: "text-slate-900",
     },
   ];
 
-  const showComposer = composerOpen || editingId !== null;
-  const showClosedFields = draft.status === "전량청산" || Boolean(draft.exit_date || draft.close_return_pct);
-  const showEntryField = showClosedFields || draft.status === "편입" || Boolean(draft.entry_date);
   const showPortfolioFields = draft.is_included;
   const showPositionExitFields =
     draft.is_included &&
@@ -694,18 +806,18 @@ export function StudyTrackerBoard({ data }: { data: StudyTrackerData }) {
       <section className="panel p-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h2 className="text-base font-semibold text-slate-900">Study Tracker</h2>
+            <h2 className="text-base font-semibold text-slate-900">Actionable Calls Board</h2>
             <p className="mt-1 text-sm text-slate-600">
-              메인 화면은 비교에 집중하고, 긴 설명은 상세 패널에서 보도록 정리했습니다.
+              이 보드는 실제 콜만 비교합니다. 산업 발표에서 언급된 종목은 별도 Sessions 탭에서 관리합니다.
             </p>
           </div>
-          {!showComposer ? (
+          {!composerOpen ? (
             <button
               type="button"
-              onClick={openComposerForCreate}
+              onClick={() => openComposerForCreate(null)}
               className="rounded-lg bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800"
             >
-              추가하기
+              새 Actionable Call
             </button>
           ) : (
             <button
@@ -713,7 +825,7 @@ export function StudyTrackerBoard({ data }: { data: StudyTrackerData }) {
               onClick={closeComposer}
               className="rounded-lg border border-slate-300 px-3 py-2 text-sm hover:bg-slate-50"
             >
-              {editingId === null ? "닫기" : "취소"}
+              닫기
             </button>
           )}
         </div>
@@ -725,20 +837,30 @@ export function StudyTrackerBoard({ data }: { data: StudyTrackerData }) {
           <div className="mt-3 rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</div>
         )}
 
-        {showComposer && (
+        {composerOpen && (
           <div className="mt-4 rounded-2xl border border-slate-200 p-4">
             <div>
               <h3 className="text-sm font-semibold text-slate-900">
-                {editingId === null ? "New Idea" : `Edit Idea #${editingId}`}
+                {editingId === null ? "New Actionable Call" : `Edit Call #${editingId}`}
               </h3>
               <p className="mt-1 text-xs text-slate-500">
-                입력은 최소화했고, 현재가/업사이드/수익률은 저장 시 자동 계산됩니다.
+                산업 발표 세션과 연결되더라도, 이 입력은 실제 콜 생성 시점 기준으로 관리합니다.
               </p>
             </div>
 
+            {(draft.source_session_id || draft.source_coverage_id) && (
+              <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+                <div className="font-medium text-slate-900">Linked Session Context</div>
+                <div className="mt-1">
+                  {initialComposer?.sourceSessionLabel ?? "Source session linked"}
+                  {initialComposer?.sourceCoverageLabel ? ` / ${initialComposer.sourceCoverageLabel}` : ""}
+                </div>
+              </div>
+            )}
+
             <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
               <label className="text-sm">
-                <div className="mb-1 text-slate-600">Presented</div>
+                <div className="mb-1 text-slate-600">Call Date</div>
                 <input
                   type="date"
                   value={draft.presented_at}
@@ -773,20 +895,36 @@ export function StudyTrackerBoard({ data }: { data: StudyTrackerData }) {
                 <input
                   value={draft.ticker}
                   onChange={(e) => updateDraft("ticker", e.target.value)}
-                  placeholder="IMVT / KRX:005930 / KOSDAQ:122640"
+                  placeholder="IMVT / QQQ / KRX:005930"
                   className="w-full rounded-lg border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
                 />
               </label>
               <label className="text-sm">
-                <div className="mb-1 text-slate-600">Currency</div>
+                <div className="mb-1 text-slate-600">Direction</div>
                 <select
-                  value={draft.currency}
-                  onChange={(e) => updateDraft("currency", e.target.value as Draft["currency"])}
+                  value={draft.call_direction}
+                  onChange={(e) => updateDraft("call_direction", e.target.value as StudyCallDirection)}
                   className="w-full rounded-lg border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
                 >
-                  <option value="">Auto</option>
-                  <option value="KRW">KRW</option>
-                  <option value="USD">USD</option>
+                  {CALL_DIRECTION_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="text-sm">
+                <div className="mb-1 text-slate-600">Status</div>
+                <select
+                  value={draft.status}
+                  onChange={(e) => updateDraft("status", e.target.value)}
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
+                >
+                  {statuses.map((status) => (
+                    <option key={status} value={status}>
+                      {status}
+                    </option>
+                  ))}
                 </select>
               </label>
               <label className="text-sm">
@@ -820,17 +958,15 @@ export function StudyTrackerBoard({ data }: { data: StudyTrackerData }) {
                 </select>
               </label>
               <label className="text-sm">
-                <div className="mb-1 text-slate-600">Status</div>
+                <div className="mb-1 text-slate-600">Currency</div>
                 <select
-                  value={draft.status}
-                  onChange={(e) => updateDraft("status", e.target.value)}
+                  value={draft.currency}
+                  onChange={(e) => updateDraft("currency", e.target.value as Draft["currency"])}
                   className="w-full rounded-lg border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
                 >
-                  {statuses.map((status) => (
-                    <option key={status} value={status}>
-                      {status}
-                    </option>
-                  ))}
+                  <option value="">Auto</option>
+                  <option value="KRW">KRW</option>
+                  <option value="USD">USD</option>
                 </select>
               </label>
               <label className="text-sm">
@@ -851,144 +987,29 @@ export function StudyTrackerBoard({ data }: { data: StudyTrackerData }) {
                   className="w-full rounded-lg border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
                 />
               </label>
-              {showEntryField && (
-                <label className="text-sm">
-                  <div className="mb-1 text-slate-600">Entry Date</div>
-                  <input
-                    type="date"
-                    value={draft.entry_date}
-                    onChange={(e) => updateDraft("entry_date", e.target.value)}
-                    className="w-full rounded-lg border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
-                  />
-                </label>
-              )}
-              {showClosedFields && (
-                <label className="text-sm">
-                  <div className="mb-1 text-slate-600">Exit Date</div>
-                  <input
-                    type="date"
-                    value={draft.exit_date}
-                    onChange={(e) => updateDraft("exit_date", e.target.value)}
-                    className="w-full rounded-lg border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
-                  />
-                </label>
-              )}
-              {showClosedFields && (
-                <label className="text-sm">
-                  <div className="mb-1 text-slate-600">Close Return</div>
-                  <input
-                    type="number"
-                    step="0.0001"
-                    value={draft.close_return_pct}
-                    onChange={(e) => updateDraft("close_return_pct", e.target.value)}
-                    className="w-full rounded-lg border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
-                  />
-                </label>
-              )}
+              <label className="text-sm">
+                <div className="mb-1 text-slate-600">Conviction (1-5)</div>
+                <input
+                  type="number"
+                  min="1"
+                  max="5"
+                  value={draft.conviction_score}
+                  onChange={(e) => updateDraft("conviction_score", e.target.value)}
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
+                />
+              </label>
+              <label className="text-sm xl:col-span-2">
+                <div className="mb-1 text-slate-600">Time Horizon</div>
+                <input
+                  value={draft.time_horizon}
+                  onChange={(e) => updateDraft("time_horizon", e.target.value)}
+                  placeholder="예: 1Q event / 6-12 months"
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
+                />
+              </label>
             </div>
 
-            <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50/60 p-4">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div>
-                  <div className="text-sm font-semibold text-slate-900">Portfolio Layer</div>
-                  <div className="mt-1 text-xs text-slate-500">
-                    Tracking Return은 발표 기준, Portfolio Return은 편입 기준으로 따로 봅니다.
-                  </div>
-                </div>
-                <label className="flex items-center gap-2 text-sm text-slate-700">
-                  <input
-                    type="checkbox"
-                    checked={draft.is_included}
-                    onChange={(e) => {
-                      const next = e.target.checked;
-                      setDraft((prev) => ({
-                        ...prev,
-                        is_included: next,
-                        included_at: next ? prev.included_at || prev.entry_date || prev.presented_at : "",
-                        included_price: next ? prev.included_price || prev.current_price || prev.pitch_price : "",
-                        position_status: next ? prev.position_status || "active" : "",
-                        exited_at: next ? prev.exited_at : "",
-                        exited_price: next ? prev.exited_price : "",
-                        weight: next ? prev.weight : "",
-                      }));
-                    }}
-                  />
-                  포트폴리오 편입
-                </label>
-              </div>
-
-              {showPortfolioFields && (
-                <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
-                  <label className="text-sm">
-                    <div className="mb-1 text-slate-600">Included At</div>
-                    <input
-                      type="date"
-                      value={draft.included_at}
-                      onChange={(e) => updateDraft("included_at", e.target.value)}
-                      className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 outline-none focus:border-slate-500"
-                    />
-                  </label>
-                  <label className="text-sm">
-                    <div className="mb-1 text-slate-600">Included Price</div>
-                    <input
-                      type="number"
-                      value={draft.included_price}
-                      onChange={(e) => updateDraft("included_price", e.target.value)}
-                      className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 outline-none focus:border-slate-500"
-                    />
-                  </label>
-                  <label className="text-sm">
-                    <div className="mb-1 text-slate-600">Weight</div>
-                    <input
-                      type="number"
-                      step="0.0001"
-                      value={draft.weight}
-                      onChange={(e) => updateDraft("weight", e.target.value)}
-                      placeholder="비우면 동일가중"
-                      className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 outline-none focus:border-slate-500"
-                    />
-                  </label>
-                  <label className="text-sm">
-                    <div className="mb-1 text-slate-600">Position Status</div>
-                    <select
-                      value={draft.position_status}
-                      onChange={(e) => updateDraft("position_status", e.target.value as Draft["position_status"])}
-                      className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 outline-none focus:border-slate-500"
-                    >
-                      {POSITION_STATUS_OPTIONS.map((status) => (
-                        <option key={status} value={status}>
-                          {status}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  {showPositionExitFields && (
-                    <label className="text-sm">
-                      <div className="mb-1 text-slate-600">Exited At</div>
-                      <input
-                        type="date"
-                        value={draft.exited_at}
-                        onChange={(e) => updateDraft("exited_at", e.target.value)}
-                        className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 outline-none focus:border-slate-500"
-                      />
-                    </label>
-                  )}
-                  {showPositionExitFields && (
-                    <label className="text-sm">
-                      <div className="mb-1 text-slate-600">Exited Price</div>
-                      <input
-                        type="number"
-                        value={draft.exited_price}
-                        onChange={(e) => updateDraft("exited_price", e.target.value)}
-                        className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 outline-none focus:border-slate-500"
-                      />
-                    </label>
-                  )}
-                </div>
-              )}
-            </div>
-
-            <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
+            <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
               <label className="text-sm">
                 <div className="mb-1 text-slate-600">Thesis</div>
                 <textarea
@@ -999,7 +1020,25 @@ export function StudyTrackerBoard({ data }: { data: StudyTrackerData }) {
                 />
               </label>
               <label className="text-sm">
-                <div className="mb-1 text-slate-600">Note</div>
+                <div className="mb-1 text-slate-600">Trigger</div>
+                <textarea
+                  rows={4}
+                  value={draft.trigger}
+                  onChange={(e) => updateDraft("trigger", e.target.value)}
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
+                />
+              </label>
+              <label className="text-sm">
+                <div className="mb-1 text-slate-600">Risk</div>
+                <textarea
+                  rows={4}
+                  value={draft.risk}
+                  onChange={(e) => updateDraft("risk", e.target.value)}
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
+                />
+              </label>
+              <label className="text-sm">
+                <div className="mb-1 text-slate-600">Summary / Note</div>
                 <textarea
                   rows={4}
                   value={draft.note}
@@ -1009,39 +1048,113 @@ export function StudyTrackerBoard({ data }: { data: StudyTrackerData }) {
               </label>
             </div>
 
-            <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
-              <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm">
-                <div className="text-slate-500">Current Price</div>
-                <div className="mt-1 font-medium text-slate-900">
-                  {formatPrice(parseOptionalNumber(draft.current_price), draft.currency || null)}
-                </div>
-              </div>
-              <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm">
-                <div className="text-slate-500">Current Return</div>
-                <div className={`mt-1 font-medium ${toneClass(parseOptionalNumber(draft.current_return_pct))}`}>
-                  {formatPct(parseOptionalNumber(draft.current_return_pct))}
-                </div>
-              </div>
-              <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm">
-                <div className="text-slate-500">Target Gap</div>
-                <div className={`mt-1 font-medium ${toneClass(parseOptionalNumber(draft.current_upside_pct))}`}>
-                  {formatPct(parseOptionalNumber(draft.current_upside_pct))}
-                </div>
-              </div>
-              <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm">
-                <div className="text-slate-500">Tracking Return</div>
-                <div className={`mt-1 font-medium ${toneClass(parseOptionalNumber(draft.tracking_return_pct))}`}>
-                  {formatPct(parseOptionalNumber(draft.tracking_return_pct))}
-                </div>
-              </div>
-              {draft.is_included && (
-                <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm">
-                  <div className="text-slate-500">Portfolio Basis</div>
-                  <div className="mt-1 font-medium text-slate-900">
-                    {formatPrice(parseOptionalNumber(draft.included_price), draft.currency || null)}
+            <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
+              <label className="text-sm">
+                <div className="mb-1 text-slate-600">Invalidation Rule</div>
+                <textarea
+                  rows={3}
+                  value={draft.invalidation_rule}
+                  onChange={(e) => updateDraft("invalidation_rule", e.target.value)}
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
+                />
+              </label>
+              <div className="rounded-2xl border border-slate-200 bg-slate-50/60 p-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <div className="text-sm font-semibold text-slate-900">Included Portfolio</div>
+                    <div className="mt-1 text-xs text-slate-500">
+                      콜 성과와 별개로 실제 편입 가정 성과를 따로 추적합니다.
+                    </div>
                   </div>
+                  <label className="flex items-center gap-2 text-sm text-slate-700">
+                    <input
+                      type="checkbox"
+                      checked={draft.is_included}
+                      onChange={(e) => {
+                        const next = e.target.checked;
+                        setDraft((prev) => ({
+                          ...prev,
+                          is_included: next,
+                          included_at: next ? prev.included_at || prev.presented_at || todayLocalIsoDate() : "",
+                          included_price: next ? prev.included_price || prev.pitch_price : "",
+                          position_status: next ? prev.position_status || "active" : "",
+                          exited_at: next ? prev.exited_at : "",
+                          exited_price: next ? prev.exited_price : "",
+                          weight: next ? prev.weight : "",
+                        }));
+                      }}
+                    />
+                    포트폴리오 편입
+                  </label>
                 </div>
-              )}
+
+                {showPortfolioFields && (
+                  <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+                    <label className="text-sm">
+                      <div className="mb-1 text-slate-600">Included At</div>
+                      <input
+                        type="date"
+                        value={draft.included_at}
+                        onChange={(e) => updateDraft("included_at", e.target.value)}
+                        className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 outline-none focus:border-slate-500"
+                      />
+                    </label>
+                    <label className="text-sm">
+                      <div className="mb-1 text-slate-600">Included Price</div>
+                      <input
+                        type="number"
+                        value={draft.included_price}
+                        onChange={(e) => updateDraft("included_price", e.target.value)}
+                        className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 outline-none focus:border-slate-500"
+                      />
+                    </label>
+                    <label className="text-sm">
+                      <div className="mb-1 text-slate-600">Weight</div>
+                      <input
+                        type="number"
+                        step="0.0001"
+                        value={draft.weight}
+                        onChange={(e) => updateDraft("weight", e.target.value)}
+                        placeholder="비우면 동일가중"
+                        className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 outline-none focus:border-slate-500"
+                      />
+                    </label>
+                    <label className="text-sm">
+                      <div className="mb-1 text-slate-600">Position Status</div>
+                      <select
+                        value={draft.position_status}
+                        onChange={(e) => updateDraft("position_status", e.target.value as Draft["position_status"])}
+                        className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 outline-none focus:border-slate-500"
+                      >
+                        <option value="active">active</option>
+                        <option value="closed">closed</option>
+                      </select>
+                    </label>
+                    {showPositionExitFields && (
+                      <label className="text-sm">
+                        <div className="mb-1 text-slate-600">Exited At</div>
+                        <input
+                          type="date"
+                          value={draft.exited_at}
+                          onChange={(e) => updateDraft("exited_at", e.target.value)}
+                          className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 outline-none focus:border-slate-500"
+                        />
+                      </label>
+                    )}
+                    {showPositionExitFields && (
+                      <label className="text-sm">
+                        <div className="mb-1 text-slate-600">Exited Price</div>
+                        <input
+                          type="number"
+                          value={draft.exited_price}
+                          onChange={(e) => updateDraft("exited_price", e.target.value)}
+                          className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 outline-none focus:border-slate-500"
+                        />
+                      </label>
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
 
             <div className="mt-4 flex flex-wrap gap-2">
@@ -1051,7 +1164,7 @@ export function StudyTrackerBoard({ data }: { data: StudyTrackerData }) {
                 disabled={isSaving}
                 className="rounded-lg bg-slate-900 px-3 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:bg-slate-400"
               >
-                {isSaving ? "Saving..." : editingId === null ? "Save Idea" : "Save Changes"}
+                {isSaving ? "Saving..." : editingId === null ? "Save Call" : "Save Changes"}
               </button>
               <button
                 type="button"
@@ -1065,7 +1178,7 @@ export function StudyTrackerBoard({ data }: { data: StudyTrackerData }) {
         )}
       </section>
 
-      <section className="grid grid-cols-2 gap-3 md:grid-cols-4">
+      <section className="grid grid-cols-2 gap-3 md:grid-cols-5">
         {cards.map((card) => (
           <div key={card.title} className="panel px-4 py-3">
             <div className="text-xs uppercase tracking-[0.18em] text-slate-500">{card.title}</div>
@@ -1076,7 +1189,7 @@ export function StudyTrackerBoard({ data }: { data: StudyTrackerData }) {
 
       <section className="panel p-4">
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-6">
-          <label className="text-sm xl:col-span-1">
+          <label className="text-sm xl:col-span-2">
             <div className="mb-1 text-slate-600">Search</div>
             <input
               value={search}
@@ -1084,6 +1197,36 @@ export function StudyTrackerBoard({ data }: { data: StudyTrackerData }) {
               placeholder="Presenter, ticker, company, thesis..."
               className="w-full rounded-lg border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
             />
+          </label>
+          <label className="text-sm">
+            <div className="mb-1 text-slate-600">Presenter</div>
+            <select
+              value={presenterFilter}
+              onChange={(e) => setPresenterFilter(e.target.value)}
+              className="w-full rounded-lg border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
+            >
+              <option value="ALL">All</option>
+              {presenters.map((presenter) => (
+                <option key={presenter} value={presenter}>
+                  {presenter}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="text-sm">
+            <div className="mb-1 text-slate-600">Direction</div>
+            <select
+              value={directionFilter}
+              onChange={(e) => setDirectionFilter(e.target.value as "ALL" | StudyCallDirection)}
+              className="w-full rounded-lg border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
+            >
+              <option value="ALL">All</option>
+              {CALL_DIRECTION_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
           </label>
           <label className="text-sm">
             <div className="mb-1 text-slate-600">Status</div>
@@ -1101,21 +1244,6 @@ export function StudyTrackerBoard({ data }: { data: StudyTrackerData }) {
             </select>
           </label>
           <label className="text-sm">
-            <div className="mb-1 text-slate-600">Sector</div>
-            <select
-              value={sectorFilter}
-              onChange={(e) => setSectorFilter(e.target.value)}
-              className="w-full rounded-lg border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
-            >
-              <option value="ALL">All</option>
-              {sectors.map((sector) => (
-                <option key={sector} value={sector}>
-                  {sector}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="text-sm">
             <div className="mb-1 text-slate-600">Portfolio</div>
             <select
               value={includedFilter}
@@ -1127,32 +1255,17 @@ export function StudyTrackerBoard({ data }: { data: StudyTrackerData }) {
               <option value="EXCLUDED">Not included</option>
             </select>
           </label>
-          <label className="text-sm">
-            <div className="mb-1 text-slate-600">Style</div>
-            <select
-              value={styleFilter}
-              onChange={(e) => setStyleFilter(e.target.value)}
-              className="w-full rounded-lg border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
-            >
-              <option value="ALL">All</option>
-              {styles.map((style) => (
-                <option key={style} value={style}>
-                  {style}
-                </option>
-              ))}
-            </select>
-          </label>
-          <div className="text-sm text-slate-500 xl:self-end">
-            <div>헤더를 클릭하면 오름차순/내림차순 정렬이 됩니다.</div>
-            <button
-              type="button"
-              onClick={() => refreshIdeas(sortedIdeas, `Refreshed ${sortedIdeas.length} ideas.`)}
-              disabled={isRefreshingQuotes || sortedIdeas.length === 0}
-              className="mt-2 rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {isRefreshingQuotes ? "Refreshing..." : "현재가 일괄 새로고침"}
-            </button>
-          </div>
+        </div>
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-3 text-sm text-slate-500">
+          <div>헤더를 클릭하면 오름차순/내림차순 정렬이 됩니다.</div>
+          <button
+            type="button"
+            onClick={() => refreshIdeas(sortedIdeas, `Refreshed ${sortedIdeas.length} calls.`)}
+            disabled={isRefreshingQuotes || sortedIdeas.length === 0}
+            className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {isRefreshingQuotes ? "Refreshing..." : "현재가 일괄 새로고침"}
+          </button>
         </div>
       </section>
 
@@ -1167,28 +1280,34 @@ export function StudyTrackerBoard({ data }: { data: StudyTrackerData }) {
                   </button>
                 </th>
                 <th className="px-3 py-3">
-                  <button type="button" onClick={() => toggleSort("presenter")} className="font-medium hover:text-slate-900">
-                    발표자 {sortKey === "presenter" ? (sortDirection === "asc" ? "↑" : "↓") : ""}
-                  </button>
-                </th>
-                <th className="px-3 py-3">
                   <button type="button" onClick={() => toggleSort("presented_at")} className="font-medium hover:text-slate-900">
-                    발표일 {sortKey === "presented_at" ? (sortDirection === "asc" ? "↑" : "↓") : ""}
+                    Call Date {sortKey === "presented_at" ? (sortDirection === "asc" ? "↑" : "↓") : ""}
                   </button>
                 </th>
                 <th className="px-3 py-3">
-                  <button type="button" onClick={() => toggleSort("status")} className="font-medium hover:text-slate-900">
-                    상태 {sortKey === "status" ? (sortDirection === "asc" ? "↑" : "↓") : ""}
+                  <button type="button" onClick={() => toggleSort("presenter")} className="font-medium hover:text-slate-900">
+                    Presenter {sortKey === "presenter" ? (sortDirection === "asc" ? "↑" : "↓") : ""}
                   </button>
                 </th>
+                <th className="px-3 py-3">
+                  <button type="button" onClick={() => toggleSort("call_direction")} className="font-medium hover:text-slate-900">
+                    Direction {sortKey === "call_direction" ? (sortDirection === "asc" ? "↑" : "↓") : ""}
+                  </button>
+                </th>
+                <th className="px-3 py-3">Status</th>
                 <th className="px-3 py-3 text-right">
                   <button type="button" onClick={() => toggleSort("tracking_return_pct")} className="font-medium hover:text-slate-900">
-                    수익률 {sortKey === "tracking_return_pct" ? (sortDirection === "asc" ? "↑" : "↓") : ""}
+                    Tracking Return {sortKey === "tracking_return_pct" ? (sortDirection === "asc" ? "↑" : "↓") : ""}
                   </button>
                 </th>
                 <th className="px-3 py-3 text-right">
-                  <button type="button" onClick={() => toggleSort("current_upside_pct")} className="font-medium hover:text-slate-900">
-                    Target Gap {sortKey === "current_upside_pct" ? (sortDirection === "asc" ? "↑" : "↓") : ""}
+                  <button type="button" onClick={() => toggleSort("adoption_count")} className="font-medium hover:text-slate-900">
+                    Adoption {sortKey === "adoption_count" ? (sortDirection === "asc" ? "↑" : "↓") : ""}
+                  </button>
+                </th>
+                <th className="px-3 py-3 text-right">
+                  <button type="button" onClick={() => toggleSort("feedback_count")} className="font-medium hover:text-slate-900">
+                    Feedback {sortKey === "feedback_count" ? (sortDirection === "asc" ? "↑" : "↓") : ""}
                   </button>
                 </th>
                 <th className="px-3 py-3">Summary</th>
@@ -1209,6 +1328,11 @@ export function StudyTrackerBoard({ data }: { data: StudyTrackerData }) {
                     <div className="font-medium text-slate-900">{idea.company_name}</div>
                     <div className="mt-0.5 flex flex-wrap items-center gap-2 text-xs text-slate-500">
                       <span>{idea.ticker}</span>
+                      {idea.source_session && (
+                        <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600">
+                          Session-linked
+                        </span>
+                      )}
                       {idea.is_included && (
                         <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700">
                           Included
@@ -1217,8 +1341,13 @@ export function StudyTrackerBoard({ data }: { data: StudyTrackerData }) {
                     </div>
                     {idea.sector && <div className="mt-1 text-xs text-slate-400">{idea.sector}</div>}
                   </td>
-                  <td className="px-3 py-3 text-slate-700">{idea.presenter}</td>
                   <td className="px-3 py-3 text-slate-700">{idea.presented_at ?? "-"}</td>
+                  <td className="px-3 py-3 text-slate-700">{idea.presenter}</td>
+                  <td className="px-3 py-3">
+                    <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs text-slate-700">
+                      {idea.call_direction}
+                    </span>
+                  </td>
                   <td className="px-3 py-3">
                     <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs text-slate-700">
                       {idea.status ?? "-"}
@@ -1227,9 +1356,8 @@ export function StudyTrackerBoard({ data }: { data: StudyTrackerData }) {
                   <td className={`px-3 py-3 text-right font-medium ${toneClass(idea.tracking_return_pct)}`}>
                     {formatPct(idea.tracking_return_pct)}
                   </td>
-                  <td className={`px-3 py-3 text-right ${toneClass(idea.current_upside_pct)}`}>
-                    {formatPct(idea.current_upside_pct)}
-                  </td>
+                  <td className="px-3 py-3 text-right text-slate-700">{idea.adoption_count}</td>
+                  <td className="px-3 py-3 text-right text-slate-700">{idea.feedback_count}</td>
                   <td className="max-w-[320px] px-3 py-3 text-xs text-slate-600">
                     <div className="line-clamp-2">{summarizeIdea(idea)}</div>
                   </td>
@@ -1244,7 +1372,7 @@ export function StudyTrackerBoard({ data }: { data: StudyTrackerData }) {
                         ⋯
                       </button>
                       {menuIdeaId === idea.id && (
-                        <div className="absolute right-0 top-10 z-20 w-32 rounded-xl border border-slate-200 bg-white p-1 shadow-lg">
+                        <div className="absolute right-0 top-10 z-20 w-40 rounded-xl border border-slate-200 bg-white p-1 shadow-lg">
                           <button
                             type="button"
                             onClick={() => startEdit(idea)}
@@ -1268,8 +1396,8 @@ export function StudyTrackerBoard({ data }: { data: StudyTrackerData }) {
               ))}
               {sortedIdeas.length === 0 && (
                 <tr>
-                  <td colSpan={8} className="px-3 py-10 text-center text-sm text-slate-500">
-                    No ideas matched the current filters.
+                  <td colSpan={10} className="px-3 py-10 text-center text-sm text-slate-500">
+                    No actionable calls matched the current filters.
                   </td>
                 </tr>
               )}
@@ -1281,23 +1409,23 @@ export function StudyTrackerBoard({ data }: { data: StudyTrackerData }) {
       {selectedIdea && (
         <div className="fixed inset-0 z-30 flex justify-end bg-slate-900/20" onClick={() => setSelectedIdeaId(null)}>
           <aside
-            className="h-full w-full max-w-xl overflow-y-auto border-l border-slate-200 bg-white p-5 shadow-2xl"
+            className="h-full w-full max-w-2xl overflow-y-auto border-l border-slate-200 bg-white p-5 shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-start justify-between gap-4">
               <div>
-                <div className="text-xs uppercase tracking-[0.18em] text-slate-500">Study Detail</div>
+                <div className="text-xs uppercase tracking-[0.18em] text-slate-500">Actionable Call</div>
                 <h3 className="mt-2 text-2xl font-semibold text-slate-900">{selectedIdea.company_name}</h3>
                 <div className="mt-1 text-sm text-slate-500">{selectedIdea.ticker}</div>
               </div>
               <div className="flex flex-wrap justify-end gap-2">
-                  <button
-                    type="button"
-                    onClick={() => startEdit(selectedIdea)}
-                    className="rounded-lg border border-slate-300 px-3 py-2 text-sm hover:bg-slate-50"
-                  >
-                    Edit
-                  </button>
+                <button
+                  type="button"
+                  onClick={() => startEdit(selectedIdea)}
+                  className="rounded-lg border border-slate-300 px-3 py-2 text-sm hover:bg-slate-50"
+                >
+                  Edit
+                </button>
                 <button
                   type="button"
                   onClick={() => refreshIdeaQuote(selectedIdea)}
@@ -1311,9 +1439,9 @@ export function StudyTrackerBoard({ data }: { data: StudyTrackerData }) {
                     type="button"
                     onClick={() => includeIdea(selectedIdea)}
                     disabled={busyId === selectedIdea.id}
-                    className="rounded-lg bg-slate-900 px-3 py-2 text-sm text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-400"
+                    className="rounded-lg bg-slate-900 px-3 py-2 text-sm text-white hover:bg-slate-800 disabled:bg-slate-400"
                   >
-                    {busyId === selectedIdea.id ? "Working..." : "포트폴리오 편입"}
+                    포트폴리오 편입
                   </button>
                 ) : (
                   <>
@@ -1356,26 +1484,54 @@ export function StudyTrackerBoard({ data }: { data: StudyTrackerData }) {
               </div>
             </div>
 
-            <div className="mt-5 grid grid-cols-2 gap-3">
+            <div className="mt-5 grid grid-cols-2 gap-3 md:grid-cols-4">
+              <div className="rounded-xl border border-slate-200 p-3 text-sm">
+                <div className="text-slate-500">Call Date</div>
+                <div className="mt-1 font-medium text-slate-900">{selectedIdea.presented_at ?? "-"}</div>
+              </div>
               <div className="rounded-xl border border-slate-200 p-3 text-sm">
                 <div className="text-slate-500">Presenter</div>
                 <div className="mt-1 font-medium text-slate-900">{selectedIdea.presenter}</div>
               </div>
               <div className="rounded-xl border border-slate-200 p-3 text-sm">
-                <div className="text-slate-500">Presented</div>
-                <div className="mt-1 font-medium text-slate-900">{selectedIdea.presented_at ?? "-"}</div>
+                <div className="text-slate-500">Direction</div>
+                <div className="mt-1 font-medium text-slate-900">{selectedIdea.call_direction}</div>
               </div>
               <div className="rounded-xl border border-slate-200 p-3 text-sm">
                 <div className="text-slate-500">Status</div>
                 <div className="mt-1 font-medium text-slate-900">{selectedIdea.status ?? "-"}</div>
               </div>
-              <div className="rounded-xl border border-slate-200 p-3 text-sm">
-                <div className="text-slate-500">Style / Sector</div>
-                <div className="mt-1 font-medium text-slate-900">
-                  {[selectedIdea.style, selectedIdea.sector].filter(Boolean).join(" / ") || "-"}
-                </div>
-              </div>
             </div>
+
+            {(selectedIdea.source_session || selectedIdea.source_coverage) && (
+              <section className="mt-5 rounded-2xl border border-slate-200 p-4">
+                <div className="text-sm font-semibold text-slate-900">Source Session</div>
+                <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
+                  <div className="rounded-xl border border-slate-200 p-3 text-sm">
+                    <div className="text-slate-500">Session</div>
+                    <div className="mt-1 font-medium text-slate-900">
+                      {selectedSourceLabel ?? "-"}
+                    </div>
+                    {selectedIdea.source_session?.title && (
+                      <div className="mt-1 text-slate-600">{selectedIdea.source_session.title}</div>
+                    )}
+                  </div>
+                  <div className="rounded-xl border border-slate-200 p-3 text-sm">
+                    <div className="text-slate-500">Covered Company</div>
+                    <div className="mt-1 font-medium text-slate-900">
+                      {selectedIdea.source_coverage
+                        ? `${selectedIdea.source_coverage.company_name} (${selectedIdea.source_coverage.ticker})`
+                        : "-"}
+                    </div>
+                    {selectedIdea.source_coverage && (
+                      <div className="mt-1 text-slate-600">
+                        stance: {selectedIdea.source_coverage.session_stance} / follow-up: {selectedIdea.source_coverage.follow_up_status}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </section>
+            )}
 
             <div className="mt-5 grid grid-cols-2 gap-3 md:grid-cols-4">
               <div className="rounded-xl border border-slate-200 p-3 text-sm">
@@ -1402,6 +1558,22 @@ export function StudyTrackerBoard({ data }: { data: StudyTrackerData }) {
                   {formatPct(selectedIdea.tracking_return_pct)}
                 </div>
               </div>
+              <div className="rounded-xl border border-slate-200 p-3 text-sm">
+                <div className="text-slate-500">Conviction</div>
+                <div className="mt-1 font-medium text-slate-900">{selectedIdea.conviction_score ?? "-"}</div>
+              </div>
+              <div className="rounded-xl border border-slate-200 p-3 text-sm">
+                <div className="text-slate-500">Time Horizon</div>
+                <div className="mt-1 font-medium text-slate-900">{selectedIdea.time_horizon ?? "-"}</div>
+              </div>
+              <div className="rounded-xl border border-slate-200 p-3 text-sm">
+                <div className="text-slate-500">Adoption</div>
+                <div className="mt-1 font-medium text-slate-900">{selectedIdea.adoption_count}</div>
+              </div>
+              <div className="rounded-xl border border-slate-200 p-3 text-sm">
+                <div className="text-slate-500">Feedback</div>
+                <div className="mt-1 font-medium text-slate-900">{selectedIdea.feedback_count}</div>
+              </div>
             </div>
 
             <section className="mt-5 grid grid-cols-1 gap-3 md:grid-cols-2">
@@ -1416,16 +1588,7 @@ export function StudyTrackerBoard({ data }: { data: StudyTrackerData }) {
             </section>
 
             <section className="mt-5 rounded-2xl border border-slate-200 p-4">
-              <div className="flex items-center justify-between gap-3">
-                <div className="text-sm font-semibold text-slate-900">Portfolio Layer</div>
-                <span
-                  className={`rounded-full px-2.5 py-1 text-xs ${
-                    selectedIdea.is_included ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-600"
-                  }`}
-                >
-                  {selectedIdea.is_included ? "Included" : "Not included"}
-                </span>
-              </div>
+              <div className="text-sm font-semibold text-slate-900">Portfolio Layer</div>
               {selectedIdea.is_included ? (
                 <div className="mt-4 grid grid-cols-2 gap-3 md:grid-cols-4">
                   <div className="rounded-xl border border-slate-200 p-3 text-sm">
@@ -1448,64 +1611,213 @@ export function StudyTrackerBoard({ data }: { data: StudyTrackerData }) {
                     <div className="text-slate-500">Position Status</div>
                     <div className="mt-1 font-medium text-slate-900">{selectedIdea.position_status ?? "-"}</div>
                   </div>
-                  <div className="rounded-xl border border-slate-200 p-3 text-sm">
-                    <div className="text-slate-500">Weight</div>
-                    <div className="mt-1 font-medium text-slate-900">
-                      {selectedIdea.weight !== null ? selectedIdea.weight.toString() : "Equal"}
-                    </div>
-                  </div>
-                  <div className="rounded-xl border border-slate-200 p-3 text-sm">
-                    <div className="text-slate-500">Exited At</div>
-                    <div className="mt-1 font-medium text-slate-900">{selectedIdea.exited_at ?? "-"}</div>
-                  </div>
-                  <div className="rounded-xl border border-slate-200 p-3 text-sm">
-                    <div className="text-slate-500">Exited Price</div>
-                    <div className="mt-1 font-medium text-slate-900">
-                      {formatPrice(selectedIdea.exited_price, selectedIdea.currency)}
-                    </div>
-                  </div>
                 </div>
               ) : (
-                <div className="mt-3 text-sm text-slate-500">
-                  아직 포트폴리오에는 포함되지 않았습니다. 편입 시 편입일/편입가 기준 Portfolio Return이 별도로 계산됩니다.
-                </div>
+                <div className="mt-3 text-sm text-slate-500">아직 Included Portfolio에는 들어가지 않은 콜입니다.</div>
               )}
             </section>
 
             <div className="mt-5 space-y-4">
               <section className="rounded-2xl border border-slate-200 p-4">
                 <div className="text-sm font-semibold text-slate-900">Thesis</div>
-                <div className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">
-                  {selectedIdea.thesis ?? "-"}
-                </div>
+                <div className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">{selectedIdea.thesis ?? "-"}</div>
               </section>
               <section className="rounded-2xl border border-slate-200 p-4">
-                <div className="text-sm font-semibold text-slate-900">Trigger / Risk</div>
-                <div className="mt-3 grid gap-3 md:grid-cols-2">
+                <div className="text-sm font-semibold text-slate-900">Trigger / Risk / Invalidation</div>
+                <div className="mt-3 grid gap-3 md:grid-cols-3">
                   <div>
                     <div className="text-xs uppercase tracking-[0.18em] text-slate-500">Trigger</div>
-                    <div className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">
-                      {selectedIdea.trigger ?? "-"}
-                    </div>
+                    <div className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">{selectedIdea.trigger ?? "-"}</div>
                   </div>
                   <div>
                     <div className="text-xs uppercase tracking-[0.18em] text-slate-500">Risk</div>
-                    <div className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">
-                      {selectedIdea.risk ?? "-"}
-                    </div>
+                    <div className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">{selectedIdea.risk ?? "-"}</div>
+                  </div>
+                  <div>
+                    <div className="text-xs uppercase tracking-[0.18em] text-slate-500">Invalidation</div>
+                    <div className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">{selectedIdea.invalidation_rule ?? "-"}</div>
                   </div>
                 </div>
               </section>
               <section className="rounded-2xl border border-slate-200 p-4">
-                <div className="text-sm font-semibold text-slate-900">Updates / Notes</div>
-                <div className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">
-                  {selectedIdea.note ?? "-"}
-                </div>
-                <div className="mt-3 text-xs text-slate-400">
-                  추후 업데이트 로그를 더 붙일 수 있도록 이 영역은 비워두었습니다.
-                </div>
+                <div className="text-sm font-semibold text-slate-900">Summary Note</div>
+                <div className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">{selectedIdea.note ?? "-"}</div>
               </section>
             </div>
+
+            <section className="mt-5 rounded-2xl border border-slate-200 p-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <div className="text-sm font-semibold text-slate-900">Feedback</div>
+                  <div className="mt-1 text-xs text-slate-500">agree / neutral / disagree 기반 MVP</div>
+                </div>
+                <div className="text-sm text-slate-500">{selectedIdea.feedback_count} responses</div>
+              </div>
+              <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
+                <label className="text-sm">
+                  <div className="mb-1 text-slate-600">Participant</div>
+                  <select
+                    value={feedbackParticipantId}
+                    onChange={(e) => setFeedbackParticipantId(e.target.value)}
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
+                  >
+                    {data.participants.map((participant) => (
+                      <option key={participant.id} value={participant.id}>
+                        {participant.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="text-sm">
+                  <div className="mb-1 text-slate-600">Stance</div>
+                  <select
+                    value={feedbackStance}
+                    onChange={(e) => setFeedbackStance(e.target.value as StudyCallFeedbackStance)}
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
+                  >
+                    {FEEDBACK_STANCE_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="text-sm md:col-span-1">
+                  <div className="mb-1 text-slate-600">Note</div>
+                  <input
+                    value={feedbackNote}
+                    onChange={(e) => setFeedbackNote(e.target.value)}
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
+                  />
+                </label>
+              </div>
+              <button
+                type="button"
+                onClick={submitFeedback}
+                disabled={busyId === selectedIdea.id || !feedbackParticipantId}
+                className="mt-3 rounded-lg border border-slate-300 px-3 py-2 text-sm hover:bg-slate-50 disabled:opacity-50"
+              >
+                Save Feedback
+              </button>
+              <div className="mt-4 space-y-3">
+                {selectedIdea.feedbacks.length === 0 ? (
+                  <div className="text-sm text-slate-500">No feedback yet.</div>
+                ) : (
+                  selectedIdea.feedbacks.map((feedback) => (
+                    <div key={feedback.id} className="rounded-xl border border-slate-200 p-3 text-sm">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="font-medium text-slate-900">{feedback.participant_name}</div>
+                        <div className="text-xs text-slate-500">{feedback.stance}</div>
+                      </div>
+                      <div className="mt-2 text-slate-700">{feedback.note ?? "-"}</div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </section>
+
+            <section className="mt-5 rounded-2xl border border-slate-200 p-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <div className="text-sm font-semibold text-slate-900">Update Timeline / Postmortem</div>
+                  <div className="mt-1 text-xs text-slate-500">materially new call이 아니면 새 row 대신 timeline에 기록합니다.</div>
+                </div>
+                <div className="text-sm text-slate-500">{selectedIdea.update_count} updates</div>
+              </div>
+              <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
+                <label className="text-sm">
+                  <div className="mb-1 text-slate-600">Type</div>
+                  <select
+                    value={updateType}
+                    onChange={(e) => setUpdateType(e.target.value as StudyCallUpdateType)}
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
+                  >
+                    {UPDATE_TYPE_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="text-sm">
+                  <div className="mb-1 text-slate-600">Created By</div>
+                  <input
+                    value={updateAuthor}
+                    onChange={(e) => setUpdateAuthor(e.target.value)}
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
+                  />
+                </label>
+                <label className="text-sm md:col-span-2">
+                  <div className="mb-1 text-slate-600">Title</div>
+                  <input
+                    value={updateTitle}
+                    onChange={(e) => setUpdateTitle(e.target.value)}
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
+                  />
+                </label>
+                <label className="text-sm md:col-span-2">
+                  <div className="mb-1 text-slate-600">Body</div>
+                  <textarea
+                    rows={4}
+                    value={updateBody}
+                    onChange={(e) => setUpdateBody(e.target.value)}
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
+                  />
+                </label>
+              </div>
+              <button
+                type="button"
+                onClick={submitUpdate}
+                disabled={busyId === selectedIdea.id || !updateBody.trim()}
+                className="mt-3 rounded-lg border border-slate-300 px-3 py-2 text-sm hover:bg-slate-50 disabled:opacity-50"
+              >
+                Save Update
+              </button>
+              <div className="mt-4 space-y-3">
+                {selectedIdea.updates.length === 0 ? (
+                  <div className="text-sm text-slate-500">No updates yet.</div>
+                ) : (
+                  selectedIdea.updates.map((update) => (
+                    <div key={update.id} className="rounded-xl border border-slate-200 p-3 text-sm">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                          <div className="font-medium text-slate-900">{update.title || update.update_type}</div>
+                          <div className="mt-1 text-xs text-slate-500">
+                            {update.update_type} · {update.created_by ?? "Unknown"} · {update.created_at.slice(0, 10)}
+                          </div>
+                        </div>
+                      </div>
+                      <div className="mt-2 whitespace-pre-wrap text-slate-700">{update.body}</div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </section>
+
+            <section className="mt-5 rounded-2xl border border-slate-200 p-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="text-sm font-semibold text-slate-900">Linked Trades</div>
+                <div className="text-sm text-slate-500">{selectedIdea.linked_trade_count} trades</div>
+              </div>
+              <div className="mt-4 space-y-3">
+                {selectedIdea.linked_trades.length === 0 ? (
+                  <div className="text-sm text-slate-500">No participant trades are linked to this call yet.</div>
+                ) : (
+                  selectedIdea.linked_trades.map((trade) => (
+                    <div key={trade.id} className="rounded-xl border border-slate-200 p-3 text-sm">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="font-medium text-slate-900">{trade.participant_name}</div>
+                        <div className="text-xs text-slate-500">{trade.trade_date}</div>
+                      </div>
+                      <div className="mt-2 text-slate-700">
+                        {trade.side} {trade.quantity} @ {trade.price.toLocaleString("en-US")}
+                        {trade.note ? ` · ${trade.note}` : ""}
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </section>
           </aside>
         </div>
       )}

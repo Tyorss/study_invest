@@ -39,7 +39,7 @@ export default async function ParticipantDetailPage({
       </header>
 
       <ParticipantHeader snapshot={data.latestSnapshot} />
-      <TradeEntryForm portfolioId={data.portfolio.id} />
+      <TradeEntryForm portfolioId={data.portfolio.id} studyCallOptions={data.studyCallOptions} />
 
       <ParticipantNotesEditor
         participantId={data.participant.id}

@@ -1,6 +1,18 @@
 import { DEFAULT_GAME_START_DATE, FX_PAIR_USDKRW } from "@/lib/constants";
 import { getAdminSupabase } from "@/lib/supabase/admin";
-import type { StudyTrackerIdeaInput, StudyTrackerIdeaRow } from "@/types/study-tracker";
+import type {
+  StudyCallFeedbackInput,
+  StudyCallFeedbackRow,
+  StudyCallUpdateInput,
+  StudyCallUpdateRow,
+  StudySessionCompanyInput,
+  StudySessionCompanyRow,
+  StudySessionInput,
+  StudySessionRow,
+  StudyTrackerIdeaInput,
+  StudyTrackerIdeaRow,
+  StudyTrackerLinkedTradeRow,
+} from "@/types/study-tracker";
 import type {
   AuditLogInsert,
   CorporateActionRow,
@@ -403,6 +415,31 @@ export async function getBenchmarkByCode(code: "SPY" | "KOSPI") {
   return (data as Instrument | null) ?? null;
 }
 
+export async function getInstrumentBySymbol(symbol: string) {
+  const supabase = getAdminSupabase();
+  const { data, error } = await supabase
+    .from("instruments")
+    .select("*")
+    .eq("symbol", symbol)
+    .eq("is_active", true)
+    .maybeSingle();
+  if (error) throw error;
+  return (data as Instrument | null) ?? null;
+}
+
+export async function getInstrumentBySymbolMarket(symbol: string, market: Instrument["market"]) {
+  const supabase = getAdminSupabase();
+  const { data, error } = await supabase
+    .from("instruments")
+    .select("*")
+    .eq("symbol", symbol)
+    .eq("market", market)
+    .eq("is_active", true)
+    .maybeSingle();
+  if (error) throw error;
+  return (data as Instrument | null) ?? null;
+}
+
 export async function getFxSeries(fromDate: string, toDate: string) {
   const supabase = getAdminSupabase();
   const { data, error } = await supabase
@@ -561,6 +598,12 @@ function normalizeStudyTrackerIdeaInput(input: StudyTrackerIdeaInput) {
     position_status: isIncluded ? input.position_status ?? null : null,
     exited_at: isIncluded ? input.exited_at ?? null : null,
     exited_price: isIncluded ? input.exited_price ?? null : null,
+    source_session_id: input.source_session_id ?? null,
+    source_coverage_id: input.source_coverage_id ?? null,
+    call_direction: input.call_direction ?? "long",
+    conviction_score: input.conviction_score ?? null,
+    invalidation_rule: input.invalidation_rule?.trim() || null,
+    time_horizon: input.time_horizon?.trim() || null,
   };
 }
 
@@ -607,4 +650,256 @@ export async function deleteStudyTrackerIdea(ideaId: number): Promise<void> {
   if (error) {
     throw toErrorWithMessage(error, "Failed to delete study tracker idea");
   }
+}
+
+export async function getParticipantsList(): Promise<Array<{ id: string; name: string }>> {
+  const supabase = getAdminSupabase();
+  const { data, error } = await supabase
+    .from("participants")
+    .select("id, name")
+    .order("name", { ascending: true });
+  if (error) {
+    throw toErrorWithMessage(error, "Failed to read participants");
+  }
+  return (data ?? []) as Array<{ id: string; name: string }>;
+}
+
+function normalizeStudySessionInput(input: StudySessionInput) {
+  return {
+    presented_at: input.presented_at,
+    presenter: input.presenter.trim(),
+    industry_name: input.industry_name.trim(),
+    title: input.title.trim(),
+    thesis: input.thesis?.trim() || null,
+    anti_thesis: input.anti_thesis?.trim() || null,
+    note: input.note?.trim() || null,
+  };
+}
+
+function normalizeStudySessionCompanyInput(input: StudySessionCompanyInput) {
+  return {
+    session_id: input.session_id,
+    company_name: input.company_name.trim(),
+    ticker: input.ticker.trim(),
+    sector: input.sector?.trim() || null,
+    session_stance: input.session_stance ?? "watch",
+    mention_reason: input.mention_reason?.trim() || null,
+    follow_up_status: input.follow_up_status ?? "waiting_event",
+    next_event_date: input.next_event_date ?? null,
+    note: input.note?.trim() || null,
+  };
+}
+
+export async function getStudySessions(): Promise<StudySessionRow[]> {
+  const supabase = getAdminSupabase();
+  const { data, error } = await supabase
+    .from("study_sessions")
+    .select("*")
+    .order("presented_at", { ascending: false, nullsFirst: false })
+    .order("id", { ascending: false });
+  if (error) {
+    throw toErrorWithMessage(error, "Failed to read study sessions");
+  }
+  return (data ?? []) as StudySessionRow[];
+}
+
+export async function insertStudySession(input: StudySessionInput): Promise<StudySessionRow> {
+  const supabase = getAdminSupabase();
+  const row = normalizeStudySessionInput(input);
+  const { data, error } = await supabase
+    .from("study_sessions")
+    .insert(row)
+    .select("*")
+    .maybeSingle();
+  if (error || !data) {
+    throw toErrorWithMessage(error, "Failed to insert study session");
+  }
+  return data as StudySessionRow;
+}
+
+export async function updateStudySession(
+  sessionId: number,
+  input: StudySessionInput,
+): Promise<StudySessionRow> {
+  const supabase = getAdminSupabase();
+  const row = normalizeStudySessionInput(input);
+  const { data, error } = await supabase
+    .from("study_sessions")
+    .update(row)
+    .eq("id", sessionId)
+    .select("*")
+    .maybeSingle();
+  if (error || !data) {
+    throw toErrorWithMessage(error, "Failed to update study session");
+  }
+  return data as StudySessionRow;
+}
+
+export async function getStudySessionCompanies(): Promise<StudySessionCompanyRow[]> {
+  const supabase = getAdminSupabase();
+  const { data, error } = await supabase
+    .from("study_session_companies")
+    .select("*")
+    .order("session_id", { ascending: false })
+    .order("id", { ascending: false });
+  if (error) {
+    throw toErrorWithMessage(error, "Failed to read study session companies");
+  }
+  return (data ?? []) as StudySessionCompanyRow[];
+}
+
+export async function insertStudySessionCompany(
+  input: StudySessionCompanyInput,
+): Promise<StudySessionCompanyRow> {
+  const supabase = getAdminSupabase();
+  const row = normalizeStudySessionCompanyInput(input);
+  const { data, error } = await supabase
+    .from("study_session_companies")
+    .insert(row)
+    .select("*")
+    .maybeSingle();
+  if (error || !data) {
+    throw toErrorWithMessage(error, "Failed to insert study session company");
+  }
+  return data as StudySessionCompanyRow;
+}
+
+export async function updateStudySessionCompany(
+  companyId: number,
+  input: StudySessionCompanyInput,
+): Promise<StudySessionCompanyRow> {
+  const supabase = getAdminSupabase();
+  const row = normalizeStudySessionCompanyInput(input);
+  const { data, error } = await supabase
+    .from("study_session_companies")
+    .update(row)
+    .eq("id", companyId)
+    .select("*")
+    .maybeSingle();
+  if (error || !data) {
+    throw toErrorWithMessage(error, "Failed to update study session company");
+  }
+  return data as StudySessionCompanyRow;
+}
+
+export async function deleteStudySessionCompany(companyId: number): Promise<void> {
+  const supabase = getAdminSupabase();
+  const { error } = await supabase
+    .from("study_session_companies")
+    .delete()
+    .eq("id", companyId);
+  if (error) {
+    throw toErrorWithMessage(error, "Failed to delete study session company");
+  }
+}
+
+export async function getStudyCallFeedbackRows(): Promise<StudyCallFeedbackRow[]> {
+  const supabase = getAdminSupabase();
+  const { data, error } = await supabase
+    .from("study_call_feedback")
+    .select("*")
+    .order("created_at", { ascending: false });
+  if (error) {
+    throw toErrorWithMessage(error, "Failed to read study call feedback");
+  }
+  return (data ?? []) as StudyCallFeedbackRow[];
+}
+
+export async function upsertStudyCallFeedback(
+  ideaId: number,
+  input: StudyCallFeedbackInput,
+): Promise<StudyCallFeedbackRow> {
+  const supabase = getAdminSupabase();
+  const row = {
+    idea_id: ideaId,
+    participant_id: input.participant_id,
+    stance: input.stance,
+    note: input.note?.trim() || null,
+  };
+  const { data, error } = await supabase
+    .from("study_call_feedback")
+    .upsert(row, { onConflict: "idea_id,participant_id", ignoreDuplicates: false })
+    .select("*")
+    .maybeSingle();
+  if (error || !data) {
+    throw toErrorWithMessage(error, "Failed to save study call feedback");
+  }
+  return data as StudyCallFeedbackRow;
+}
+
+export async function getStudyCallUpdateRows(): Promise<StudyCallUpdateRow[]> {
+  const supabase = getAdminSupabase();
+  const { data, error } = await supabase
+    .from("study_call_updates")
+    .select("*")
+    .order("created_at", { ascending: false });
+  if (error) {
+    throw toErrorWithMessage(error, "Failed to read study call updates");
+  }
+  return (data ?? []) as StudyCallUpdateRow[];
+}
+
+export async function insertStudyCallUpdate(
+  ideaId: number,
+  input: StudyCallUpdateInput,
+): Promise<StudyCallUpdateRow> {
+  const supabase = getAdminSupabase();
+  const row = {
+    idea_id: ideaId,
+    update_type: input.update_type ?? "update",
+    title: input.title?.trim() || null,
+    body: input.body.trim(),
+    created_by: input.created_by?.trim() || null,
+  };
+  const { data, error } = await supabase
+    .from("study_call_updates")
+    .insert(row)
+    .select("*")
+    .maybeSingle();
+  if (error || !data) {
+    throw toErrorWithMessage(error, "Failed to insert study call update");
+  }
+  return data as StudyCallUpdateRow;
+}
+
+export async function getStudyLinkedTrades(): Promise<StudyTrackerLinkedTradeRow[]> {
+  const supabase = getAdminSupabase();
+  const portfolioPairs = await getParticipantsWithPortfolios();
+  const portfolioMap = new Map(
+    portfolioPairs.map((row) => [
+      row.portfolio.id,
+      { participant_id: row.participant.id, participant_name: row.participant.name },
+    ]),
+  );
+
+  const { data, error } = await supabase
+    .from("trades")
+    .select("id, source_idea_id, portfolio_id, trade_date, side, quantity, price, note, instruments(symbol)")
+    .not("source_idea_id", "is", null)
+    .order("trade_date", { ascending: false })
+    .order("id", { ascending: false });
+  if (error) {
+    throw toErrorWithMessage(error, "Failed to read linked trades");
+  }
+
+  return (data ?? [])
+    .map((row: any) => {
+      const participant = portfolioMap.get(String(row.portfolio_id));
+      if (!participant || row.source_idea_id === null || row.source_idea_id === undefined) return null;
+      const instrument = Array.isArray(row.instruments) ? row.instruments[0] : row.instruments;
+      return {
+        id: Number(row.id),
+        source_idea_id: Number(row.source_idea_id),
+        portfolio_id: String(row.portfolio_id),
+        trade_date: String(row.trade_date),
+        side: row.side as "BUY" | "SELL" | "CLOSE",
+        quantity: row.quantity,
+        price: row.price,
+        note: row.note ? String(row.note) : null,
+        participant_id: participant.participant_id,
+        participant_name: participant.participant_name,
+        symbol: instrument?.symbol ? String(instrument.symbol) : null,
+      };
+    })
+    .filter((row): row is StudyTrackerLinkedTradeRow => row !== null);
 }

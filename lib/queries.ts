@@ -2,6 +2,7 @@ import { buildBenchmarkReturnByDate } from "@/lib/benchmarks";
 import {
   getBenchmarkByCode,
   getParticipantNotes,
+  getStudyTrackerIdeas,
   getBenchmarkPriceSeries,
   getParticipantsWithPortfolios,
   getGameStartDate,
@@ -343,8 +344,40 @@ export async function fetchParticipantDetail(participantId: string) {
   const gameStartDate = await getGameStartDate();
   const latestSnapshot = await getParticipantLatestSnapshot(participantId);
   const snapshots = await getParticipantSnapshots(participantId, gameStartDate);
-  const trades = await getTradesJournal(pair.portfolio.id);
+  const [tradeRows, studyIdeas] = await Promise.all([
+    getTradesJournal(pair.portfolio.id),
+    getStudyTrackerIdeas(),
+  ]);
   const notes = await getParticipantNotes(participantId);
+  const studyCallOptions = studyIdeas.map((idea) => ({
+    id: idea.id,
+    label: [idea.ticker, idea.company_name, idea.presenter, idea.presented_at]
+      .filter(Boolean)
+      .join(" | "),
+  }));
+  const ideaMap = new Map(
+    studyIdeas.map((idea) => [
+      idea.id,
+      {
+        id: idea.id,
+        ticker: idea.ticker,
+        company_name: idea.company_name,
+        presenter: idea.presenter,
+        presented_at: idea.presented_at,
+      },
+    ]),
+  );
+  const trades = tradeRows.map((trade: any) => ({
+    ...trade,
+    source_idea_id:
+      trade.source_idea_id === null || trade.source_idea_id === undefined
+        ? null
+        : Number(trade.source_idea_id),
+    linked_call:
+      trade.source_idea_id === null || trade.source_idea_id === undefined
+        ? null
+        : ideaMap.get(Number(trade.source_idea_id)) ?? null,
+  }));
 
   const latestSnapshotDate = latestSnapshot?.date ? String(latestSnapshot.date) : null;
   const latestTradeDate = trades[0]?.trade_date ? String(trades[0].trade_date) : null;
@@ -563,6 +596,7 @@ export async function fetchParticipantDetail(participantId: string) {
     })),
     holdings,
     notes,
+    studyCallOptions,
     trades: trades.map((t: any) => ({
       ...t,
       quantity: Number(t.quantity),

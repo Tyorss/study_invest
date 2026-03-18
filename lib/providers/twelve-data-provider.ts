@@ -1,6 +1,6 @@
 import type { Market } from "@/types/db";
 import { getRequiredEnv } from "@/lib/env";
-import type { MarketDataProvider } from "@/lib/providers/types";
+import type { DailyClosePoint, MarketDataProvider } from "@/lib/providers/types";
 
 const BASE_URL = "https://api.twelvedata.com";
 const RETRY_DELAYS_MS = [300, 900];
@@ -81,10 +81,10 @@ function extractDate(datetime: unknown): string | null {
   return /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : null;
 }
 
-function parseDailyCloseOnOrBefore(
+function parseDailyClosePointOnOrBefore(
   json: Record<string, unknown>,
   targetDate: string,
-): number | null {
+): DailyClosePoint | null {
   const values = json.values;
   if (!Array.isArray(values) || values.length === 0) {
     return null;
@@ -96,7 +96,7 @@ function parseDailyCloseOnOrBefore(
     if (rowDate > targetDate) continue;
     const close = Number(row.close);
     if (Number.isFinite(close)) {
-      return close;
+      return { date: rowDate, close };
     }
   }
   return null;
@@ -110,6 +110,16 @@ export class TwelveDataProvider implements MarketDataProvider {
   }
 
   async getDailyClose(
+    symbol: string,
+    market: Market,
+    date: string,
+    providerSymbol?: string,
+  ) {
+    const point = await this.getDailyClosePoint(symbol, market, date, providerSymbol);
+    return point?.close ?? null;
+  }
+
+  async getDailyClosePoint(
     symbol: string,
     market: Market,
     date: string,
@@ -143,9 +153,9 @@ export class TwelveDataProvider implements MarketDataProvider {
         lastError = `[TwelveData] ${candidate}: ${msg}`;
         continue;
       }
-      const close = parseDailyCloseOnOrBefore(json, date);
-      if (close !== null) {
-        return close;
+      const point = parseDailyClosePointOnOrBefore(json, date);
+      if (point !== null) {
+        return point;
       }
       lastError = `[TwelveData] ${candidate}: no close on/before ${date}`;
     }
@@ -175,6 +185,6 @@ export class TwelveDataProvider implements MarketDataProvider {
         typeof json.message === "string" ? json.message : "Unknown provider error";
       throw new Error(`[TwelveData] USD/KRW: ${msg}`);
     }
-    return parseDailyCloseOnOrBefore(json, date);
+    return parseDailyClosePointOnOrBefore(json, date)?.close ?? null;
   }
 }

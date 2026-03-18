@@ -19,6 +19,7 @@ type Payload = {
   symbol?: string;
   market?: Market;
   instrument_name?: string;
+  source_idea_id?: number | null;
   trade_date: string;
   side: "BUY" | "SELL" | "CLOSE";
   quantity?: number;
@@ -45,6 +46,13 @@ function validate(body: Partial<Payload>): string | null {
   }
   if (!(body.price && Number.isFinite(Number(body.price)) && Number(body.price) > 0)) {
     return "price must be > 0";
+  }
+  if (
+    body.source_idea_id !== undefined &&
+    body.source_idea_id !== null &&
+    (!Number.isInteger(Number(body.source_idea_id)) || Number(body.source_idea_id) < 1)
+  ) {
+    return "source_idea_id must be a positive integer";
   }
   return null;
 }
@@ -333,6 +341,10 @@ export async function POST(req: Request) {
     const { instrumentId, created, warnings } = await resolveInstrumentId(body);
     const { portfolio, participant } = await loadPortfolioContext(body.portfolio_id as string);
     const instrument = await loadInstrumentById(instrumentId);
+    const sourceIdeaId =
+      body.source_idea_id === null || body.source_idea_id === undefined
+        ? null
+        : Number(body.source_idea_id);
 
     if (instrument.currency === "USD") {
       const fx = await ensureFxForDate(body.trade_date as string);
@@ -361,9 +373,20 @@ export async function POST(req: Request) {
     }
 
     const supabase = getAdminSupabase();
+    if (sourceIdeaId !== null) {
+      const { data: linkedIdea, error: linkedIdeaError } = await supabase
+        .from("study_tracker_ideas")
+        .select("id")
+        .eq("id", sourceIdeaId)
+        .maybeSingle();
+      if (linkedIdeaError || !linkedIdea) {
+        return NextResponse.json({ error: "Linked study call not found" }, { status: 400 });
+      }
+    }
     const row = {
       portfolio_id: body.portfolio_id,
       instrument_id: instrumentId,
+      source_idea_id: sourceIdeaId,
       trade_date: body.trade_date,
       side: body.side,
       quantity: body.side === "CLOSE" ? 0 : qty,

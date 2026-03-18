@@ -1,5 +1,5 @@
 import type { Market } from "@/types/db";
-import type { MarketDataProvider } from "@/lib/providers/types";
+import type { DailyClosePoint, MarketDataProvider } from "@/lib/providers/types";
 
 function hash(input: string): number {
   let h = 0;
@@ -19,12 +19,20 @@ function baseForSymbol(symbol: string, market: Market): number {
 
 export class MockMarketDataProvider implements MarketDataProvider {
   async getDailyClose(symbol: string, market: Market, date: string) {
+    const point = await this.getDailyClosePoint(symbol, market, date);
+    return point?.close ?? null;
+  }
+
+  async getDailyClosePoint(symbol: string, market: Market, date: string): Promise<DailyClosePoint> {
     const base = baseForSymbol(symbol, market);
     const day = hash(date) % 60;
     const seasonal = Math.sin(day / 6) * 0.02;
     const drift = (hash(`${symbol}:${date}`) % 200 - 100) / 10000;
     const price = base * (1 + seasonal + drift);
-    return Math.max(price, 1);
+    return {
+      date,
+      close: Math.max(price, 1),
+    };
   }
 
   async getFxRate(pair: string, date: string) {

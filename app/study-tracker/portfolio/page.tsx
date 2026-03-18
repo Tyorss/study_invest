@@ -34,7 +34,7 @@ export default async function StudyTrackerPortfolioPage({
               </Link>
               <h1 className="mt-2 text-2xl font-semibold tracking-tight">Included Portfolio</h1>
               <p className="mt-2 text-sm text-slate-600">
-                실제로 편입했다고 가정한 종목만 모아서 편입가 기준 Portfolio Return을 추적합니다.
+                실제로 편입했다고 가정한 종목만 모아서 편입가 기준 Portfolio Return을 추적합니다. Tracking Return은 현재가 기준입니다.
               </p>
               <p className="mt-1 text-xs text-slate-500">
                 상세 패널에서 편입일/편입가/청산값을 직접 수정할 수 있고, 현재가는 새로고침으로 다시 조회할 수 있습니다.

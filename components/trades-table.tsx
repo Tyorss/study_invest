@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { formatNum } from "@/lib/format";
 
@@ -11,6 +11,14 @@ type TradeRow = {
   quantity: number;
   price: number;
   note: string | null;
+  source_idea_id?: number | null;
+  linked_call?: {
+    id: number;
+    ticker: string;
+    company_name: string;
+    presenter: string;
+    presented_at: string | null;
+  } | null;
   instruments?: {
     symbol?: string;
     market?: string;
@@ -36,6 +44,17 @@ export function TradesTable({ rows }: { rows: TradeRow[] }) {
   const router = useRouter();
   const [busyId, setBusyId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [scope, setScope] = useState<"ALL" | "LINKED" | "INDEPENDENT">("ALL");
+
+  const filteredRows = useMemo(() => {
+    if (scope === "LINKED") {
+      return rows.filter((row) => row.source_idea_id !== null && row.source_idea_id !== undefined);
+    }
+    if (scope === "INDEPENDENT") {
+      return rows.filter((row) => row.source_idea_id === null || row.source_idea_id === undefined);
+    }
+    return rows;
+  }, [rows, scope]);
 
   async function onEdit(row: TradeRow) {
     setError(null);
@@ -123,12 +142,35 @@ export function TradesTable({ rows }: { rows: TradeRow[] }) {
 
   return (
     <div className="panel overflow-auto">
-      <div className="border-b border-slate-200 px-4 py-3 text-sm font-semibold">Trades Journal</div>
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
+        <div className="text-sm font-semibold">Trades Journal</div>
+        <div className="flex flex-wrap gap-2">
+          {[
+            ["ALL", "All"],
+            ["LINKED", "Linked to Study"],
+            ["INDEPENDENT", "Independent"],
+          ].map(([value, label]) => {
+            const active = scope === value;
+            return (
+              <button
+                key={value}
+                type="button"
+                onClick={() => setScope(value as "ALL" | "LINKED" | "INDEPENDENT")}
+                className={`rounded-full px-3 py-1 text-xs font-medium ${
+                  active ? "bg-slate-900 text-white" : "border border-slate-300 text-slate-600 hover:bg-slate-50"
+                }`}
+              >
+                {label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
       {error && <div className="border-b border-slate-200 px-4 py-2 text-sm text-rose-700">{error}</div>}
       <table className="min-w-full text-sm">
         <thead className="bg-slate-50 text-slate-600">
           <tr>
-            {["Date", "Symbol", "Side", "Qty", "Price", "Note", "Action"].map((h) => (
+            {["Date", "Symbol", "Study Call", "Side", "Qty", "Price", "Note", "Action"].map((h) => (
               <th key={h} className="whitespace-nowrap px-3 py-3 text-left font-semibold">
                 {h}
               </th>
@@ -136,7 +178,7 @@ export function TradesTable({ rows }: { rows: TradeRow[] }) {
           </tr>
         </thead>
         <tbody>
-          {rows.map((r) => {
+          {filteredRows.map((r) => {
             const market = r.instruments?.market;
             const priceDigits = market === "KR" ? 0 : market === "US" ? 1 : 4;
             const isBusy = busyId === r.id;
@@ -144,6 +186,18 @@ export function TradesTable({ rows }: { rows: TradeRow[] }) {
               <tr key={r.id} className="border-t border-slate-200/70">
                 <td className="px-3 py-3">{r.trade_date}</td>
                 <td className="px-3 py-3">{r.instruments?.symbol ?? "-"}</td>
+                <td className="px-3 py-3">
+                  {r.linked_call ? (
+                    <div className="text-xs leading-5 text-slate-600">
+                      <div className="font-medium text-slate-900">{r.linked_call.ticker}</div>
+                      <div>
+                        {r.linked_call.company_name} · {r.linked_call.presenter}
+                      </div>
+                    </div>
+                  ) : (
+                    <span className="text-xs text-slate-400">Independent</span>
+                  )}
+                </td>
                 <td className="px-3 py-3">{r.side}</td>
                 <td className="num px-3 py-3">{formatNum(r.quantity, 0)}</td>
                 <td className="num px-3 py-3">{formatNum(r.price, priceDigits)}</td>
@@ -171,9 +225,9 @@ export function TradesTable({ rows }: { rows: TradeRow[] }) {
               </tr>
             );
           })}
-          {rows.length === 0 && (
+          {filteredRows.length === 0 && (
             <tr>
-              <td colSpan={7} className="px-3 py-10 text-center text-slate-500">
+              <td colSpan={8} className="px-3 py-10 text-center text-slate-500">
                 No trades
               </td>
             </tr>

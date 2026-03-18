@@ -4,7 +4,8 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 const items = [
-  { href: "/study-tracker", label: "Idea Leaderboard" },
+  { href: "/study-tracker", label: "Actionable Calls" },
+  { href: "/study-tracker/sessions", label: "Sessions" },
   { href: "/study-tracker/portfolio", label: "Included Portfolio" },
 ];
 
