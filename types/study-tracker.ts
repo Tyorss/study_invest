@@ -1,5 +1,14 @@
 export type StudyTrackerPositionStatus = "active" | "closed";
-export type StudyCallDirection = "long" | "avoid" | "watch";
+export type StudyCallDirection = "long" | "neutral" | "short";
+export type StudyTargetStatus =
+  | "active"
+  | "target_hit"
+  | "revising"
+  | "upgraded"
+  | "downgraded"
+  | "trim_or_hold"
+  | "closed"
+  | "invalidated";
 export type StudySessionStance = "bullish" | "watch" | "neutral" | "avoid";
 export type StudySessionFollowUpStatus =
   | "waiting_event"
@@ -19,6 +28,10 @@ export interface StudyTrackerIdeaRow {
   sector: string | null;
   pitch_price: string | null;
   target_price: string | null;
+  current_target_price: string | null;
+  target_status: StudyTargetStatus | null;
+  target_updated_at: string | null;
+  target_note: string | null;
   pitch_upside_pct: string | null;
   currency: "KRW" | "USD" | null;
   current_price: string | null;
@@ -70,6 +83,11 @@ export interface StudySessionCompanyRow {
   company_name: string;
   ticker: string;
   sector: string | null;
+  target_price: string | null;
+  reference_price: string | null;
+  reference_price_date: string | null;
+  current_price: string | null;
+  currency: "KRW" | "USD" | null;
   session_stance: StudySessionStance;
   mention_reason: string | null;
   follow_up_status: StudySessionFollowUpStatus;
@@ -151,6 +169,11 @@ export interface StudySessionCompany {
   company_name: string;
   ticker: string;
   sector: string | null;
+  target_price: number | null;
+  reference_price: number | null;
+  reference_price_date: string | null;
+  current_price: number | null;
+  currency: "KRW" | "USD" | null;
   session_stance: StudySessionStance;
   mention_reason: string | null;
   follow_up_status: StudySessionFollowUpStatus;
@@ -183,6 +206,14 @@ export interface StudyTrackerIdea {
   sector: string | null;
   pitch_price: number | null;
   target_price: number | null;
+  current_target_price: number | null;
+  effective_target_price: number | null;
+  target_status: StudyTargetStatus | null;
+  effective_target_status: StudyTargetStatus;
+  target_updated_at: string | null;
+  target_note: string | null;
+  remaining_upside_pct: number | null;
+  needs_target_update: boolean;
   pitch_upside_pct: number | null;
   currency: "KRW" | "USD" | null;
   current_price: number | null;
@@ -231,6 +262,10 @@ export interface StudyTrackerIdeaInput {
   sector?: string | null;
   pitch_price?: number | null;
   target_price?: number | null;
+  current_target_price?: number | null;
+  target_status?: StudyTargetStatus | null;
+  target_updated_at?: string | null;
+  target_note?: string | null;
   pitch_upside_pct?: number | null;
   currency?: "KRW" | "USD" | null;
   current_price?: number | null;
@@ -276,6 +311,11 @@ export interface StudySessionCompanyInput {
   company_name: string;
   ticker: string;
   sector?: string | null;
+  target_price?: number | null;
+  reference_price?: number | null;
+  reference_price_date?: string | null;
+  current_price?: number | null;
+  currency?: "KRW" | "USD" | null;
   session_stance?: StudySessionStance | null;
   mention_reason?: string | null;
   follow_up_status?: StudySessionFollowUpStatus | null;

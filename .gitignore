@@ -1,6 +1,8 @@
-﻿node_modules
+node_modules
 .next
 out
+.python_packages
+.venv
 *.log
 .env
 .env.local

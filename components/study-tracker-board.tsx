@@ -6,6 +6,7 @@ import { formatPct } from "@/lib/format";
 import type {
   StudyCallDirection,
   StudyCallFeedbackStance,
+  StudyTargetStatus,
   StudyCallUpdateType,
   StudyTrackerData,
   StudyTrackerIdea,
@@ -37,8 +38,18 @@ const DEFAULT_STYLE_OPTIONS = [
 ];
 const CALL_DIRECTION_OPTIONS: Array<{ value: StudyCallDirection; label: string }> = [
   { value: "long", label: "매수" },
-  { value: "watch", label: "관찰" },
-  { value: "avoid", label: "회피" },
+  { value: "neutral", label: "중립" },
+  { value: "short", label: "매도" },
+];
+const TARGET_STATUS_OPTIONS: Array<{ value: StudyTargetStatus; label: string }> = [
+  { value: "active", label: "활성" },
+  { value: "target_hit", label: "목표 도달" },
+  { value: "revising", label: "재산정 필요" },
+  { value: "upgraded", label: "목표 상향" },
+  { value: "downgraded", label: "목표 하향" },
+  { value: "trim_or_hold", label: "차익실현/보유" },
+  { value: "closed", label: "종료" },
+  { value: "invalidated", label: "무효화" },
 ];
 const POSITION_STATUS_OPTIONS = ["active", "closed"] as const;
 const FEEDBACK_STANCE_OPTIONS: Array<{ value: StudyCallFeedbackStance; label: string }> = [
@@ -72,6 +83,9 @@ type Draft = {
   currency: "" | "KRW" | "USD";
   pitch_price: string;
   target_price: string;
+  current_target_price: string;
+  target_status: "" | StudyTargetStatus;
+  target_note: string;
   thesis: string;
   trigger: string;
   risk: string;
@@ -100,6 +114,7 @@ type SortKey =
   | "call_direction"
   | "status"
   | "tracking_return_pct"
+  | "effective_target_price"
   | "adoption_count"
   | "feedback_count";
 
@@ -130,6 +145,9 @@ function emptyDraft(prefill?: ComposerPrefill | null): Draft {
     currency: prefill?.currency ?? "",
     pitch_price: prefill?.pitch_price?.toString() ?? "",
     target_price: prefill?.target_price?.toString() ?? "",
+    current_target_price: prefill?.current_target_price?.toString() ?? "",
+    target_status: prefill?.target_status ?? "",
+    target_note: prefill?.target_note ?? "",
     thesis: prefill?.thesis ?? "",
     trigger: prefill?.trigger ?? "",
     risk: prefill?.risk ?? "",
@@ -145,7 +163,7 @@ function emptyDraft(prefill?: ComposerPrefill | null): Draft {
     exited_price: prefill?.exited_price?.toString() ?? "",
     source_session_id: prefill?.source_session_id ? String(prefill.source_session_id) : "",
     source_coverage_id: prefill?.source_coverage_id ? String(prefill.source_coverage_id) : "",
-    call_direction: prefill?.call_direction ?? "long",
+    call_direction: prefill?.call_direction ?? "neutral",
     conviction_score: prefill?.conviction_score?.toString() ?? "",
     invalidation_rule: prefill?.invalidation_rule ?? "",
     time_horizon: prefill?.time_horizon ?? "",
@@ -162,6 +180,9 @@ function ideaToDraft(idea: StudyTrackerIdea): Draft {
     currency: idea.currency ?? "",
     pitch_price: idea.pitch_price?.toString() ?? "",
     target_price: idea.target_price?.toString() ?? "",
+    current_target_price: idea.current_target_price?.toString() ?? "",
+    target_status: idea.target_status ?? "",
+    target_note: idea.target_note ?? "",
     thesis: idea.thesis ?? "",
     trigger: idea.trigger ?? "",
     risk: idea.risk ?? "",
@@ -214,6 +235,10 @@ function toPayload(draft: Draft, existing?: StudyTrackerIdea | null): StudyTrack
     sector: draft.sector.trim() || null,
     pitch_price: parseOptionalNumber(draft.pitch_price),
     target_price: parseOptionalNumber(draft.target_price),
+    current_target_price: parseOptionalNumber(draft.current_target_price),
+    target_status: draft.target_status || null,
+    target_note: draft.target_note.trim() || null,
+    target_updated_at: existing?.target_updated_at ?? null,
     pitch_upside_pct: existing?.pitch_upside_pct ?? null,
     currency: draft.currency || null,
     current_price: existing?.current_price ?? null,
@@ -289,6 +314,52 @@ function compareNullableNumber(a: number | null | undefined, b: number | null | 
   return av - bv;
 }
 
+function directionLabel(value: StudyCallDirection) {
+  return CALL_DIRECTION_OPTIONS.find((option) => option.value === value)?.label ?? value;
+}
+
+function targetStatusLabel(value: StudyTargetStatus) {
+  return TARGET_STATUS_OPTIONS.find((option) => option.value === value)?.label ?? value;
+}
+
+function formatCompactDate(value: string | null | undefined) {
+  if (!value) return "-";
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return value.slice(2);
+  }
+  return value;
+}
+
+function shouldShowTargetBadge(idea: StudyTrackerIdea) {
+  return idea.needs_target_update || idea.effective_target_status !== "active";
+}
+
+function targetStatusTone(idea: StudyTrackerIdea) {
+  if (idea.needs_target_update) return "border-amber-200 bg-amber-50 text-amber-700";
+  switch (idea.effective_target_status) {
+    case "target_hit":
+      return "border-emerald-200 bg-emerald-50 text-emerald-700";
+    case "upgraded":
+      return "border-sky-200 bg-sky-50 text-sky-700";
+    case "downgraded":
+      return "border-rose-200 bg-rose-50 text-rose-700";
+    case "revising":
+      return "border-amber-200 bg-amber-50 text-amber-700";
+    case "trim_or_hold":
+      return "border-violet-200 bg-violet-50 text-violet-700";
+    case "closed":
+    case "invalidated":
+      return "border-slate-200 bg-slate-100 text-slate-700";
+    default:
+      return "border-slate-200 bg-slate-100 text-slate-700";
+  }
+}
+
+function describeTargetStatus(idea: StudyTrackerIdea) {
+  if (idea.needs_target_update) return "업데이트 필요";
+  return targetStatusLabel(idea.effective_target_status);
+}
+
 function sortUnique(values: Array<string | null | undefined>) {
   return [...new Set(values.filter((v): v is string => Boolean(v?.trim())).map((v) => v.trim()))].sort(
     (a, b) => a.localeCompare(b, "ko-KR"),
@@ -332,6 +403,8 @@ function compareIdeas(a: StudyTrackerIdea, b: StudyTrackerIdea, key: SortKey) {
       return compareNullableString(a.status, b.status);
     case "tracking_return_pct":
       return compareNullableNumber(a.tracking_return_pct, b.tracking_return_pct);
+    case "effective_target_price":
+      return compareNullableNumber(a.effective_target_price, b.effective_target_price);
     case "adoption_count":
       return compareNullableNumber(a.adoption_count, b.adoption_count);
     case "feedback_count":
@@ -348,22 +421,6 @@ async function readApiResponse<T>(res: Response): Promise<T> {
     throw new Error(text?.trim() || `HTTP ${res.status}`);
   }
   return (await res.json()) as T;
-}
-
-function describeCurrentPriceSource(idea: StudyTrackerIdea) {
-  if (idea.current_price === null) {
-    return "저장된 현재가가 없습니다. '현재가 새로고침'으로 실제 시세를 다시 조회할 수 있습니다.";
-  }
-  return "현재가는 저장된 시장 데이터입니다. 저장 또는 '현재가 새로고침' 시 provider에서 다시 조회합니다.";
-}
-
-function describeTrackingFormula(idea: StudyTrackerIdea) {
-  if (idea.current_price !== null && idea.pitch_price !== null && idea.pitch_price > 0) {
-    return `${formatPrice(idea.current_price, idea.currency)} / ${formatPrice(idea.pitch_price, idea.currency)} - 1 = ${formatPct(
-      idea.tracking_return_pct,
-    )}`;
-  }
-  return "추적 수익률은 항상 현재가 기준(current / pitch - 1)으로 계산합니다.";
 }
 
 export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
@@ -992,6 +1049,31 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
                 />
               </label>
               <label className="text-sm">
+                <div className="mb-1 text-slate-600">현재 목표가</div>
+                <input
+                  type="number"
+                  value={draft.current_target_price}
+                  onChange={(e) => updateDraft("current_target_price", e.target.value)}
+                  placeholder="비워두면 초기 목표가를 그대로 사용"
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
+                />
+              </label>
+              <label className="text-sm">
+                <div className="mb-1 text-slate-600">목표 상태</div>
+                <select
+                  value={draft.target_status}
+                  onChange={(e) => updateDraft("target_status", e.target.value as Draft["target_status"])}
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
+                >
+                  <option value="">자동(활성)</option>
+                  {TARGET_STATUS_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="text-sm">
                 <div className="mb-1 text-slate-600">확신도 (1-5)</div>
                 <input
                   type="number"
@@ -999,6 +1081,15 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
                   max="5"
                   value={draft.conviction_score}
                   onChange={(e) => updateDraft("conviction_score", e.target.value)}
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
+                />
+              </label>
+              <label className="text-sm xl:col-span-2">
+                <div className="mb-1 text-slate-600">목표 메모</div>
+                <input
+                  value={draft.target_note}
+                  onChange={(e) => updateDraft("target_note", e.target.value)}
+                  placeholder="예: TP 도달 후 실적 확인 뒤 상향 검토"
                   className="w-full rounded-lg border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
                 />
               </label>
@@ -1285,7 +1376,7 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
                 </th>
                 <th className="px-3 py-3">
                   <button type="button" onClick={() => toggleSort("presented_at")} className="font-medium hover:text-slate-900">
-                    콜 날짜 {sortKey === "presented_at" ? (sortDirection === "asc" ? "↑" : "↓") : ""}
+                    발표 날짜 {sortKey === "presented_at" ? (sortDirection === "asc" ? "↑" : "↓") : ""}
                   </button>
                 </th>
                 <th className="px-3 py-3">
@@ -1304,14 +1395,9 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
                     추적 수익률 {sortKey === "tracking_return_pct" ? (sortDirection === "asc" ? "↑" : "↓") : ""}
                   </button>
                 </th>
-                <th className="px-3 py-3 text-right">
-                  <button type="button" onClick={() => toggleSort("adoption_count")} className="font-medium hover:text-slate-900">
-                    채택 수 {sortKey === "adoption_count" ? (sortDirection === "asc" ? "↑" : "↓") : ""}
-                  </button>
-                </th>
-                <th className="px-3 py-3 text-right">
-                  <button type="button" onClick={() => toggleSort("feedback_count")} className="font-medium hover:text-slate-900">
-                    의견 수 {sortKey === "feedback_count" ? (sortDirection === "asc" ? "↑" : "↓") : ""}
+                <th className="px-3 py-3">
+                  <button type="button" onClick={() => toggleSort("effective_target_price")} className="font-medium hover:text-slate-900">
+                    목표 / 상태 {sortKey === "effective_target_price" ? (sortDirection === "asc" ? "↑" : "↓") : ""}
                   </button>
                 </th>
                 <th className="px-3 py-3">요약</th>
@@ -1345,23 +1431,40 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
                     </div>
                     {idea.sector && <div className="mt-1 text-xs text-slate-400">{idea.sector}</div>}
                   </td>
-                  <td className="px-3 py-3 text-slate-700">{idea.presented_at ?? "-"}</td>
+                  <td className="px-3 py-3 whitespace-nowrap text-slate-700">{formatCompactDate(idea.presented_at)}</td>
                   <td className="px-3 py-3 text-slate-700">{idea.presenter}</td>
-                  <td className="px-3 py-3">
-                    <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs text-slate-700">
-                      {idea.call_direction}
+                  <td className="px-3 py-3 whitespace-nowrap">
+                    <span className="inline-flex whitespace-nowrap rounded-full bg-slate-100 px-2.5 py-1 text-xs text-slate-700">
+                      {directionLabel(idea.call_direction)}
                     </span>
                   </td>
-                  <td className="px-3 py-3">
-                    <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs text-slate-700">
+                  <td className="px-3 py-3 whitespace-nowrap">
+                    <span className="inline-flex whitespace-nowrap rounded-full bg-slate-100 px-2.5 py-1 text-xs text-slate-700">
                       {idea.status ?? "-"}
                     </span>
                   </td>
                   <td className={`px-3 py-3 text-right font-medium ${toneClass(idea.tracking_return_pct)}`}>
                     {formatPct(idea.tracking_return_pct)}
                   </td>
-                  <td className="px-3 py-3 text-right text-slate-700">{idea.adoption_count}</td>
-                  <td className="px-3 py-3 text-right text-slate-700">{idea.feedback_count}</td>
+                  <td className="px-3 py-3">
+                    <div className="text-sm font-medium text-slate-900">
+                      {formatPrice(idea.current_price, idea.currency)} {"->"} {formatPrice(idea.effective_target_price, idea.currency)}
+                    </div>
+                    <div className="mt-1 flex flex-wrap items-center gap-2">
+                      {idea.remaining_upside_pct !== null && (
+                        <span className={`text-xs ${toneClass(idea.remaining_upside_pct)}`}>
+                          잔여 업사이드 {formatPct(idea.remaining_upside_pct)}
+                        </span>
+                      )}
+                      {shouldShowTargetBadge(idea) && (
+                        <span
+                          className={`rounded-full border px-2 py-0.5 text-[11px] font-medium ${targetStatusTone(idea)}`}
+                        >
+                          {describeTargetStatus(idea)}
+                        </span>
+                      )}
+                    </div>
+                  </td>
                   <td className="max-w-[320px] px-3 py-3 text-xs text-slate-600">
                     <div className="line-clamp-2">{summarizeIdea(idea)}</div>
                   </td>
@@ -1400,7 +1503,7 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
               ))}
               {sortedIdeas.length === 0 && (
                 <tr>
-                  <td colSpan={10} className="px-3 py-10 text-center text-sm text-slate-500">
+                  <td colSpan={9} className="px-3 py-10 text-center text-sm text-slate-500">
                     현재 조건에 맞는 콜이 없습니다.
                   </td>
                 </tr>
@@ -1490,8 +1593,8 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
 
             <div className="mt-5 grid grid-cols-2 gap-3 md:grid-cols-4">
               <div className="rounded-xl border border-slate-200 p-3 text-sm">
-                <div className="text-slate-500">콜 날짜</div>
-                <div className="mt-1 font-medium text-slate-900">{selectedIdea.presented_at ?? "-"}</div>
+                <div className="text-slate-500">발표 날짜</div>
+                <div className="mt-1 font-medium text-slate-900">{formatCompactDate(selectedIdea.presented_at)}</div>
               </div>
               <div className="rounded-xl border border-slate-200 p-3 text-sm">
                 <div className="text-slate-500">발표자</div>
@@ -1499,7 +1602,7 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
               </div>
               <div className="rounded-xl border border-slate-200 p-3 text-sm">
                 <div className="text-slate-500">방향</div>
-                <div className="mt-1 font-medium text-slate-900">{selectedIdea.call_direction}</div>
+                <div className="mt-1 font-medium text-slate-900">{directionLabel(selectedIdea.call_direction)}</div>
               </div>
               <div className="rounded-xl border border-slate-200 p-3 text-sm">
                 <div className="text-slate-500">상태</div>
@@ -1551,9 +1654,29 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
                 </div>
               </div>
               <div className="rounded-xl border border-slate-200 p-3 text-sm">
-                <div className="text-slate-500">목표가</div>
+                <div className="text-slate-500">초기 목표가</div>
                 <div className="mt-1 font-medium text-slate-900">
                   {formatPrice(selectedIdea.target_price, selectedIdea.currency)}
+                </div>
+              </div>
+              <div className="rounded-xl border border-slate-200 p-3 text-sm">
+                <div className="text-slate-500">현재 목표가</div>
+                <div className="mt-1 font-medium text-slate-900">
+                  {formatPrice(selectedIdea.effective_target_price, selectedIdea.currency)}
+                </div>
+              </div>
+              <div className="rounded-xl border border-slate-200 p-3 text-sm">
+                <div className="text-slate-500">목표 상태</div>
+                <div className="mt-1">
+                  <span className={`rounded-full border px-2 py-0.5 text-xs font-medium ${targetStatusTone(selectedIdea)}`}>
+                    {describeTargetStatus(selectedIdea)}
+                  </span>
+                </div>
+              </div>
+              <div className="rounded-xl border border-slate-200 p-3 text-sm">
+                <div className="text-slate-500">목표 수정일</div>
+                <div className="mt-1 font-medium text-slate-900">
+                  {selectedIdea.target_updated_at ? selectedIdea.target_updated_at.slice(0, 10) : "-"}
                 </div>
               </div>
               <div className="rounded-xl border border-slate-200 p-3 text-sm">
@@ -1571,6 +1694,12 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
                 <div className="mt-1 font-medium text-slate-900">{selectedIdea.time_horizon ?? "-"}</div>
               </div>
               <div className="rounded-xl border border-slate-200 p-3 text-sm">
+                <div className="text-slate-500">잔여 업사이드</div>
+                <div className={`mt-1 font-medium ${toneClass(selectedIdea.remaining_upside_pct)}`}>
+                  {formatPct(selectedIdea.remaining_upside_pct)}
+                </div>
+              </div>
+              <div className="rounded-xl border border-slate-200 p-3 text-sm">
                 <div className="text-slate-500">채택 수</div>
                 <div className="mt-1 font-medium text-slate-900">{selectedIdea.adoption_count}</div>
               </div>
@@ -1580,14 +1709,10 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
               </div>
             </div>
 
-            <section className="mt-5 grid grid-cols-1 gap-3 md:grid-cols-2">
-              <div className="rounded-xl border border-slate-200 p-3 text-sm">
-                <div className="text-slate-500">현재가 출처</div>
-                <div className="mt-1 text-slate-900">{describeCurrentPriceSource(selectedIdea)}</div>
-              </div>
-              <div className="rounded-xl border border-slate-200 p-3 text-sm">
-                <div className="text-slate-500">추적 수익률 계산식</div>
-                <div className="mt-1 text-slate-900">{describeTrackingFormula(selectedIdea)}</div>
+            <section className="mt-5 rounded-2xl border border-slate-200 p-4">
+              <div className="text-sm font-semibold text-slate-900">목표 메모</div>
+              <div className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">
+                {selectedIdea.target_note ?? "-"}
               </div>
             </section>
 

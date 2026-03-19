@@ -89,6 +89,34 @@ export function withStudyTrackerHint(message: string) {
     return "산업 발표/피드백/연결 거래용 테이블이 아직 생성되지 않았습니다. Supabase SQL Editor에서 migrations/0006_study_sessions_and_call_links.sql을 실행해 주세요.";
   }
 
+  const missingSessionCompanyPrices =
+    lower.includes("study_session_companies") &&
+    (lower.includes("target_price") ||
+      lower.includes("reference_price") ||
+      lower.includes("reference_price_date") ||
+      lower.includes("current_price") ||
+      lower.includes("currency"));
+  if (missingSessionCompanyPrices) {
+    return "자유 종목 가격 컬럼이 아직 생성되지 않았습니다. Supabase SQL Editor에서 migrations/0007_study_session_company_prices.sql을 실행해 주세요.";
+  }
+
+  const missingTargetStateColumns =
+    lower.includes("study_tracker_ideas") &&
+    (lower.includes("current_target_price") ||
+      lower.includes("target_status") ||
+      lower.includes("target_updated_at") ||
+      lower.includes("target_note"));
+  if (missingTargetStateColumns) {
+    return "스터디 종목 목표 상태 컬럼이 아직 생성되지 않았습니다. Supabase SQL Editor에서 migrations/0009_study_tracker_target_state.sql을 실행해 주세요.";
+  }
+
+  const staleDirectionConstraint =
+    lower.includes("chk_study_tracker_call_direction") ||
+    (lower.includes("call_direction") && lower.includes("violates check constraint"));
+  if (staleDirectionConstraint) {
+    return "스터디 종목 방향 제약이 아직 갱신되지 않았습니다. Supabase SQL Editor에서 migrations/0008_study_tracker_call_direction.sql을 실행해 주세요.";
+  }
+
   return message;
 }
 
@@ -106,8 +134,8 @@ export function normalizeStudyTrackerIdeaPayload(payload: unknown): StudyTracker
     throw new Error("position_status must be active or closed");
   }
   const callDirection = parseOptionalString(body.call_direction);
-  if (callDirection !== null && !["long", "avoid", "watch"].includes(callDirection)) {
-    throw new Error("call_direction must be long, avoid, or watch");
+  if (callDirection !== null && !["long", "neutral", "short"].includes(callDirection)) {
+    throw new Error("call_direction must be long, neutral, or short");
   }
   const weight = parseOptionalNumber(body.weight, "weight");
   if (weight !== null && weight <= 0) {
@@ -120,6 +148,24 @@ export function normalizeStudyTrackerIdeaPayload(payload: unknown): StudyTracker
   ) {
     throw new Error("conviction_score must be an integer between 1 and 5");
   }
+  const targetStatus = parseOptionalString(body.target_status);
+  if (
+    targetStatus !== null &&
+    ![
+      "active",
+      "target_hit",
+      "revising",
+      "upgraded",
+      "downgraded",
+      "trim_or_hold",
+      "closed",
+      "invalidated",
+    ].includes(targetStatus)
+  ) {
+    throw new Error(
+      "target_status must be active, target_hit, revising, upgraded, downgraded, trim_or_hold, closed, or invalidated",
+    );
+  }
 
   return {
     presented_at: parseOptionalDate(body.presented_at, "presented_at"),
@@ -129,6 +175,19 @@ export function normalizeStudyTrackerIdeaPayload(payload: unknown): StudyTracker
     sector: parseOptionalString(body.sector),
     pitch_price: parseOptionalNumber(body.pitch_price, "pitch_price"),
     target_price: parseOptionalNumber(body.target_price, "target_price"),
+    current_target_price: parseOptionalNumber(body.current_target_price, "current_target_price"),
+    target_status: targetStatus as
+      | "active"
+      | "target_hit"
+      | "revising"
+      | "upgraded"
+      | "downgraded"
+      | "trim_or_hold"
+      | "closed"
+      | "invalidated"
+      | null,
+    target_updated_at: parseOptionalString(body.target_updated_at),
+    target_note: parseOptionalString(body.target_note),
     pitch_upside_pct: parseOptionalNumber(body.pitch_upside_pct, "pitch_upside_pct"),
     currency: currency as "KRW" | "USD" | null,
     current_price: parseOptionalNumber(body.current_price, "current_price"),
@@ -153,7 +212,7 @@ export function normalizeStudyTrackerIdeaPayload(payload: unknown): StudyTracker
     exited_price: parseOptionalNumber(body.exited_price, "exited_price"),
     source_session_id: parseOptionalNumber(body.source_session_id, "source_session_id"),
     source_coverage_id: parseOptionalNumber(body.source_coverage_id, "source_coverage_id"),
-    call_direction: callDirection as "long" | "avoid" | "watch" | null,
+    call_direction: callDirection as "long" | "neutral" | "short" | null,
     conviction_score: convictionScore,
     invalidation_rule: parseOptionalString(body.invalidation_rule),
     time_horizon: parseOptionalString(body.time_horizon),
@@ -194,11 +253,20 @@ export function normalizeStudySessionCompanyPayload(
   if (!resolvedSessionId || !Number.isInteger(resolvedSessionId) || resolvedSessionId < 1) {
     throw new Error("session_id is required");
   }
+  const currency = parseOptionalString(body.currency);
+  if (currency !== null && currency !== "KRW" && currency !== "USD") {
+    throw new Error("currency must be KRW or USD");
+  }
   return {
     session_id: resolvedSessionId,
     company_name: parseRequiredString(body.company_name, "company_name"),
     ticker: parseRequiredString(body.ticker, "ticker"),
     sector: parseOptionalString(body.sector),
+    target_price: parseOptionalNumber(body.target_price, "target_price"),
+    reference_price: parseOptionalNumber(body.reference_price, "reference_price"),
+    reference_price_date: parseOptionalDate(body.reference_price_date, "reference_price_date"),
+    current_price: parseOptionalNumber(body.current_price, "current_price"),
+    currency: currency as "KRW" | "USD" | null,
     session_stance: (sessionStance as "bullish" | "watch" | "neutral" | "avoid" | null) ?? "watch",
     mention_reason: parseOptionalString(body.mention_reason),
     follow_up_status:

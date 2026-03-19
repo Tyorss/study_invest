@@ -10,7 +10,7 @@ export function getOptionalEnv(name: string, fallback: string): string {
   return process.env[name] ?? fallback;
 }
 
-export type MarketDataProviderName = "TWELVE" | "ALPHA" | "YAHOO";
+export type MarketDataProviderName = "TWELVE" | "ALPHA" | "YAHOO" | "YFINANCE" | "FDR";
 
 export function hasNonEmptyEnv(name: string) {
   return Boolean(process.env[name]?.trim());
@@ -28,6 +28,8 @@ function mapProviderToken(token: string): MarketDataProviderName | null {
   if (t === "REAL") return "TWELVE";
   if (t === "TWELVE") return "TWELVE";
   if (t === "YAHOO") return "YAHOO";
+  if (t === "YFINANCE") return "YFINANCE";
+  if (t === "FDR") return "FDR";
   if (t === "ALPHA") return "ALPHA";
   return null;
 }
@@ -46,7 +48,7 @@ function uniqueProviders(values: MarketDataProviderName[]) {
 export function parseRequestedMarketDataProviders(): ProviderParseResult {
   const chainRaw = process.env.MARKET_DATA_PROVIDERS?.trim();
   const singleRaw = process.env.MARKET_DATA_PROVIDER?.trim();
-  const rawInput = chainRaw || singleRaw || "TWELVE";
+  const rawInput = chainRaw || singleRaw || "TWELVE,YAHOO,YFINANCE,FDR";
   const tokens = rawInput.split(",").map((x) => x.trim()).filter(Boolean);
 
   const providers: MarketDataProviderName[] = [];

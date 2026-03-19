@@ -56,22 +56,6 @@ function toneClass(value: number | null) {
   return "text-slate-900";
 }
 
-function describeCurrentPriceSource(idea: StudyTrackerIdea) {
-  if (idea.current_price === null) {
-    return "저장된 현재가가 없습니다. '현재가 새로고침'으로 실제 시세를 다시 조회할 수 있습니다.";
-  }
-  return "현재가는 저장된 시장 데이터입니다. 저장 또는 '현재가 새로고침' 시 시세 제공사에서 다시 조회합니다.";
-}
-
-function describeTrackingFormula(idea: StudyTrackerIdea) {
-  if (idea.current_price !== null && idea.pitch_price !== null && idea.pitch_price > 0) {
-    return `${formatPrice(idea.current_price, idea.currency)} / ${formatPrice(idea.pitch_price, idea.currency)} - 1 = ${formatPct(
-      idea.tracking_return_pct,
-    )}`;
-  }
-  return "추적 수익률은 항상 현재가 기준(current / pitch - 1)으로 계산합니다.";
-}
-
 function compareNullableString(a: string | null | undefined, b: string | null | undefined) {
   return (a ?? "").localeCompare(b ?? "", "ko-KR");
 }
@@ -686,17 +670,6 @@ export function StudyTrackerPortfolioBoard({ data }: { data: StudyTrackerPortfol
                 </div>
               </div>
             </div>
-
-            <section className="mt-5 grid grid-cols-1 gap-3 md:grid-cols-2">
-              <div className="rounded-xl border border-slate-200 p-3 text-sm">
-                <div className="text-slate-500">현재가 출처</div>
-                <div className="mt-1 text-slate-900">{describeCurrentPriceSource(selectedIdea)}</div>
-              </div>
-              <div className="rounded-xl border border-slate-200 p-3 text-sm">
-                <div className="text-slate-500">추적 수익률 계산식</div>
-                <div className="mt-1 text-slate-900">{describeTrackingFormula(selectedIdea)}</div>
-              </div>
-            </section>
 
             <section className="mt-5 rounded-2xl border border-slate-200 p-4">
               <div className="text-sm font-semibold text-slate-900">포트폴리오 편집</div>

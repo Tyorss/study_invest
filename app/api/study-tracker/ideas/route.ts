@@ -36,6 +36,13 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
     const input = normalizeStudyTrackerIdeaPayload(body);
+    if (
+      input.current_target_price !== null ||
+      input.target_status !== null ||
+      (input.target_note ?? "").trim()
+    ) {
+      input.target_updated_at = input.target_updated_at ?? new Date().toISOString();
+    }
     const enriched = await autoFillStudyTrackerIdea(input);
     const row = await insertStudyTrackerIdea(enriched.input);
     return NextResponse.json({

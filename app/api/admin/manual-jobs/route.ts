@@ -35,9 +35,10 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  const configuredSecret = process.env.CRON_SECRET?.trim();
+  const configuredSecret =
+    process.env.ADMIN_JOB_SECRET?.trim() || process.env.CRON_SECRET?.trim();
   if (!configuredSecret) {
-    return NextResponse.json({ error: "CRON_SECRET is not configured" }, { status: 500 });
+    return NextResponse.json({ error: "ADMIN_JOB_SECRET is not configured" }, { status: 500 });
   }
 
   const providedSecret = body?.secret?.trim() ?? "";

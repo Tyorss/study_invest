@@ -17,7 +17,7 @@ export default async function StudyTrackerPage({
     companyName?: string;
     ticker?: string;
     sector?: string;
-    callDirection?: "long" | "watch" | "avoid";
+    callDirection?: "long" | "neutral" | "short";
     sourceSessionLabel?: string;
     sourceCoverageLabel?: string;
   };
@@ -31,7 +31,7 @@ export default async function StudyTrackerPage({
             company_name: searchParams.companyName ?? "",
             ticker: searchParams.ticker ?? "",
             sector: searchParams.sector ?? "",
-            call_direction: searchParams.callDirection ?? "long",
+            call_direction: searchParams.callDirection ?? "neutral",
             source_session_id: searchParams.sourceSessionId
               ? Number(searchParams.sourceSessionId)
               : null,

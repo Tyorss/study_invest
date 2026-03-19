@@ -3,6 +3,7 @@ import {
   parseRequestedMarketDataProviders,
   type MarketDataProviderName,
 } from "@/lib/env";
+import { PythonMarketDataProvider } from "@/lib/providers/python-market-data-provider";
 import { TwelveDataProvider } from "@/lib/providers/twelve-data-provider";
 import { YahooMarketDataProvider } from "@/lib/providers/yahoo-provider";
 import type { MarketDataProvider } from "@/lib/providers/types";
@@ -45,6 +46,22 @@ function buildProviderHandle(requestedProvider: MarketDataProviderName): Provide
     };
   }
 
+  if (requestedProvider === "YFINANCE") {
+    return {
+      requestedProvider,
+      provider: new PythonMarketDataProvider("yfinance"),
+      initError: null,
+    };
+  }
+
+  if (requestedProvider === "FDR") {
+    return {
+      requestedProvider,
+      provider: new PythonMarketDataProvider("fdr"),
+      initError: null,
+    };
+  }
+
   return {
     requestedProvider,
     provider: null,
@@ -59,7 +76,7 @@ export function resolveMarketDataProviders(): ProviderRegistryResolution {
     throw new Error(
       `[MarketDataProvider] Invalid provider token(s): ${parsed.invalidValues.join(
         ", ",
-      )}. Allowed values: TWELVE, YAHOO, ALPHA (REAL alias = TWELVE).`,
+      )}. Allowed values: TWELVE, YAHOO, YFINANCE, FDR, ALPHA (REAL alias = TWELVE).`,
     );
   }
   const handles = parsed.providers.map(buildProviderHandle);
