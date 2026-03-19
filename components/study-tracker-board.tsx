@@ -1363,7 +1363,7 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
             </select>
           </label>
           <label className="text-sm">
-            <div className="mb-1 text-slate-600">Status</div>
+            <div className="mb-1 text-slate-600">상태</div>
             <select
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value)}
@@ -1404,7 +1404,92 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
       </section>
 
       <section className="panel overflow-hidden">
-        <div className="overflow-x-auto">
+        <div className="divide-y divide-slate-200 md:hidden">
+          {sortedIdeas.map((idea) => (
+            <div
+              key={idea.id}
+              className="space-y-3 p-4"
+              onClick={() => {
+                setSelectedIdeaId(idea.id);
+                setMenuIdeaId(null);
+              }}
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="truncate font-medium text-slate-900">{idea.company_name}</div>
+                  <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                    <span>{idea.ticker}</span>
+                    {idea.sector ? <span>{idea.sector}</span> : null}
+                  </div>
+                </div>
+                <div className="shrink-0 text-right text-xs text-slate-500">
+                  <div>{formatCompactDate(idea.presented_at)}</div>
+                  <div className="mt-1 whitespace-nowrap">{idea.presenter}</div>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                <span className="inline-flex whitespace-nowrap rounded-full bg-slate-100 px-2.5 py-1 text-xs text-slate-700">
+                  {directionLabel(idea.call_direction)}
+                </span>
+                <span className="inline-flex whitespace-nowrap rounded-full bg-slate-100 px-2.5 py-1 text-xs text-slate-700">
+                  {idea.status ?? "-"}
+                </span>
+                {idea.source_session ? (
+                  <span className="inline-flex whitespace-nowrap rounded-full bg-slate-100 px-2.5 py-1 text-xs text-slate-600">
+                    발표 연결
+                  </span>
+                ) : null}
+                {idea.is_included ? (
+                  <span className="inline-flex whitespace-nowrap rounded-full bg-emerald-50 px-2.5 py-1 text-xs text-emerald-700">
+                    편입
+                  </span>
+                ) : null}
+              </div>
+
+              <div className="grid grid-cols-2 gap-3 text-sm">
+                <div>
+                  <div className="text-xs text-slate-500">추적 수익률</div>
+                  <div className={`mt-1 font-medium ${toneClass(idea.tracking_return_pct)}`}>
+                    {formatPct(idea.tracking_return_pct)}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-xs text-slate-500">업사이드</div>
+                  <div className="mt-1 font-medium text-slate-900">{displayRemainingMovePct(idea)}</div>
+                  {formatUpsideSummary(idea) ? (
+                    <div className="mt-1 text-xs text-slate-500">{formatUpsideSummary(idea)}</div>
+                  ) : null}
+                </div>
+              </div>
+
+              <div className="text-xs text-slate-600">
+                <div className="line-clamp-2">{summarizeIdea(idea)}</div>
+              </div>
+
+              <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+                <button
+                  type="button"
+                  onClick={() => startEdit(idea)}
+                  className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                >
+                  수정
+                </button>
+                <button
+                  type="button"
+                  onClick={() => deleteIdea(idea)}
+                  disabled={busyId === idea.id}
+                  className="rounded-lg border border-rose-300 px-3 py-1.5 text-xs font-medium text-rose-700 hover:bg-rose-50 disabled:opacity-50"
+                >
+                  {busyId === idea.id ? "삭제 중..." : "삭제"}
+                </button>
+              </div>
+            </div>
+          ))}
+          {sortedIdeas.length === 0 && <div className="px-4 py-10 text-center text-sm text-slate-500">현재 조건에 맞는 콜이 없습니다.</div>}
+        </div>
+
+        <div className="hidden overflow-x-auto md:block">
           <table className="min-w-full text-sm">
             <thead className="bg-slate-50 text-left text-slate-600">
               <tr>
@@ -1464,7 +1549,7 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
                       )}
                       {idea.is_included && (
                         <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700">
-                          Included
+                          편입
                         </span>
                       )}
                     </div>

@@ -521,7 +521,55 @@ export function StudyTrackerPortfolioBoard({ data }: { data: StudyTrackerPortfol
       </section>
 
       <section className="panel overflow-hidden">
-        <div className="overflow-x-auto">
+        <div className="divide-y divide-slate-200 md:hidden">
+          {sortedIdeas.map((idea) => {
+            const markPrice =
+              idea.position_status === "closed" ? idea.exited_price ?? null : idea.current_price ?? null;
+            return (
+              <div key={idea.id} className="space-y-3 p-4" onClick={() => openIdea(idea)}>
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="truncate font-medium text-slate-900">{idea.company_name}</div>
+                    <div className="mt-1 text-xs text-slate-500">
+                      {[idea.ticker, idea.presenter].filter(Boolean).join(" · ")}
+                    </div>
+                  </div>
+                  <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs text-slate-700">
+                    {idea.position_status === "active" ? "보유중" : idea.position_status === "closed" ? "종료" : "-"}
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3 text-sm">
+                  <div>
+                    <div className="text-xs text-slate-500">편입일</div>
+                    <div className="mt-1 font-medium text-slate-900">{idea.included_at ?? "-"}</div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-slate-500">포트폴리오 수익률</div>
+                    <div className={`mt-1 font-medium ${toneClass(idea.portfolio_return_pct)}`}>
+                      {formatPct(idea.portfolio_return_pct)}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-slate-500">편입가</div>
+                    <div className="mt-1 font-medium text-slate-900">{formatPrice(idea.included_price, idea.currency)}</div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-slate-500">{idea.position_status === "closed" ? "종료가" : "현재가"}</div>
+                    <div className="mt-1 font-medium text-slate-900">{formatPrice(markPrice, idea.currency)}</div>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                  <span>비중 {idea.weight !== null ? idea.weight.toString() : "동일가중"}</span>
+                </div>
+              </div>
+            );
+          })}
+          {sortedIdeas.length === 0 && <div className="px-4 py-10 text-center text-sm text-slate-500">현재 조건에 맞는 편입 종목이 없습니다.</div>}
+        </div>
+
+        <div className="hidden overflow-x-auto md:block">
           <table className="min-w-full text-sm">
             <thead className="bg-slate-50 text-left text-slate-600">
               <tr>

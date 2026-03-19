@@ -624,7 +624,69 @@ export function StudySessionsBoard({ data }: { data: StudySessionData }) {
       </section>
 
       <section className="panel overflow-hidden">
-        <div className="overflow-x-auto">
+        <div className="divide-y divide-slate-200 md:hidden">
+          {filteredEntries.map((entry) => (
+            <div
+              key={entry.company.id}
+              className="space-y-3 p-4"
+              onClick={() => openEntry(entry)}
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="truncate font-medium text-slate-900">{entry.company.company_name}</div>
+                  <div className="mt-1 text-xs text-slate-500">
+                    {[entry.company.ticker, entry.company.sector].filter(Boolean).join(" · ") || "-"}
+                  </div>
+                </div>
+                <div className="shrink-0 text-right text-xs text-slate-500">
+                  <div>{entry.session.presented_at}</div>
+                  <div className="mt-1 whitespace-nowrap">{entry.session.presenter}</div>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                <span
+                  className={`inline-flex whitespace-nowrap rounded-full border px-2.5 py-1 text-xs ${stanceTone(entry.company.session_stance)}`}
+                >
+                  {stanceLabel(entry.company.session_stance)}
+                </span>
+                <span
+                  className={`inline-flex whitespace-nowrap rounded-full border px-2.5 py-1 text-xs ${followUpTone(entry.company.follow_up_status)}`}
+                >
+                  {followUpLabel(entry.company.follow_up_status)}
+                </span>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3 text-sm">
+                <div>
+                  <div className="text-xs text-slate-500">등록 기준가</div>
+                  <div className="mt-1 font-medium text-slate-900">
+                    {formatPrice(entry.company.reference_price, entry.company.currency)}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-xs text-slate-500">기준일</div>
+                  <div className="mt-1 font-medium text-slate-900">{entry.company.reference_price_date ?? "-"}</div>
+                </div>
+              </div>
+
+              <div className="text-xs text-slate-600">
+                <div className="line-clamp-2">
+                  {summarize(
+                    entry.company.summary_line ??
+                      entry.company.mention_reason ??
+                      entry.session.thesis ??
+                      entry.company.note ??
+                      entry.session.note,
+                  )}
+                </div>
+              </div>
+            </div>
+          ))}
+          {filteredEntries.length === 0 && <div className="px-4 py-10 text-center text-slate-500">조건에 맞는 자유 종목이 없습니다.</div>}
+        </div>
+
+        <div className="hidden overflow-x-auto md:block">
           <table className="min-w-full text-sm">
             <thead className="bg-slate-50 text-left text-slate-600">
               <tr>
