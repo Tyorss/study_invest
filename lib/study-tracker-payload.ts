@@ -100,6 +100,16 @@ export function withStudyTrackerHint(message: string) {
     return "자유 종목 가격 컬럼이 아직 생성되지 않았습니다. Supabase SQL Editor에서 migrations/0007_study_session_company_prices.sql을 실행해 주세요.";
   }
 
+  const staleFreeIdeaConstraint =
+    lower.includes("chk_study_session_stance") ||
+    lower.includes("chk_study_session_follow_up") ||
+    lower.includes("summary_line") ||
+    lower.includes("checkpoint_note") ||
+    lower.includes("risk_note");
+  if (staleFreeIdeaConstraint) {
+    return "자유 종목 보드 구조가 아직 갱신되지 않았습니다. Supabase SQL Editor에서 migrations/0010_free_ideas_board_refactor.sql을 실행해 주세요.";
+  }
+
   const missingTargetStateColumns =
     lower.includes("study_tracker_ideas") &&
     (lower.includes("current_target_price") ||
@@ -238,13 +248,13 @@ export function normalizeStudySessionCompanyPayload(
 ): StudySessionCompanyInput {
   const body = (payload ?? {}) as Record<string, unknown>;
   const sessionStance = parseOptionalString(body.session_stance);
-  if (sessionStance !== null && !["bullish", "watch", "neutral", "avoid"].includes(sessionStance)) {
-    throw new Error("session_stance must be bullish, watch, neutral, or avoid");
+  if (sessionStance !== null && !["long", "short", "neutral"].includes(sessionStance)) {
+    throw new Error("session_stance must be long, short, or neutral");
   }
   const followUpStatus = parseOptionalString(body.follow_up_status);
   if (
     followUpStatus !== null &&
-    !["waiting_event", "ready_for_call", "dropped", "converted"].includes(followUpStatus)
+    !["watching", "waiting_event", "ready_for_call", "archived"].includes(followUpStatus)
   ) {
     throw new Error("follow_up_status is invalid");
   }
@@ -267,11 +277,14 @@ export function normalizeStudySessionCompanyPayload(
     reference_price_date: parseOptionalDate(body.reference_price_date, "reference_price_date"),
     current_price: parseOptionalNumber(body.current_price, "current_price"),
     currency: currency as "KRW" | "USD" | null,
-    session_stance: (sessionStance as "bullish" | "watch" | "neutral" | "avoid" | null) ?? "watch",
+    session_stance: (sessionStance as "long" | "short" | "neutral" | null) ?? "neutral",
+    summary_line: parseOptionalString(body.summary_line),
     mention_reason: parseOptionalString(body.mention_reason),
+    checkpoint_note: parseOptionalString(body.checkpoint_note),
+    risk_note: parseOptionalString(body.risk_note),
     follow_up_status:
-      (followUpStatus as "waiting_event" | "ready_for_call" | "dropped" | "converted" | null) ??
-      "waiting_event",
+      (followUpStatus as "watching" | "waiting_event" | "ready_for_call" | "archived" | null) ??
+      "watching",
     next_event_date: parseOptionalDate(body.next_event_date, "next_event_date"),
     note: parseOptionalString(body.note),
   };

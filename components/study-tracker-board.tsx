@@ -114,7 +114,7 @@ type SortKey =
   | "call_direction"
   | "status"
   | "tracking_return_pct"
-  | "effective_target_price"
+  | "remaining_upside_pct"
   | "adoption_count"
   | "feedback_count";
 
@@ -330,10 +330,6 @@ function formatCompactDate(value: string | null | undefined) {
   return value;
 }
 
-function shouldShowTargetBadge(idea: StudyTrackerIdea) {
-  return idea.needs_target_update || idea.effective_target_status !== "active";
-}
-
 function targetStatusTone(idea: StudyTrackerIdea) {
   if (idea.needs_target_update) return "border-amber-200 bg-amber-50 text-amber-700";
   switch (idea.effective_target_status) {
@@ -358,6 +354,46 @@ function targetStatusTone(idea: StudyTrackerIdea) {
 function describeTargetStatus(idea: StudyTrackerIdea) {
   if (idea.needs_target_update) return "업데이트 필요";
   return targetStatusLabel(idea.effective_target_status);
+}
+
+function compactTargetStateText(idea: StudyTrackerIdea) {
+  if (idea.needs_target_update) return "재산정";
+  switch (idea.effective_target_status) {
+    case "target_hit":
+      return "목표 도달";
+    case "revising":
+      return "재산정";
+    case "upgraded":
+      return "상향";
+    case "downgraded":
+      return "하향";
+    case "trim_or_hold":
+      return "차익/보유";
+    case "closed":
+      return "종료";
+    case "invalidated":
+      return "무효화";
+    default:
+      return null;
+  }
+}
+
+function formatUpsideSummary(idea: StudyTrackerIdea) {
+  if (idea.effective_target_status === "target_hit" || idea.needs_target_update) {
+    return null;
+  }
+  const tpText = `TP ${formatPrice(idea.effective_target_price, idea.currency)}`;
+  const stateText = compactTargetStateText(idea);
+  return stateText ? `${tpText} · ${stateText}` : tpText;
+}
+
+function displayRemainingMovePct(idea: StudyTrackerIdea) {
+  if (idea.effective_target_status === "target_hit" || idea.needs_target_update) {
+    return idea.call_direction === "short" ? "매도의견" : "목표가 달성";
+  }
+  if (idea.remaining_upside_pct === null) return "-";
+  const adjusted = idea.call_direction === "short" ? -idea.remaining_upside_pct : idea.remaining_upside_pct;
+  return formatPct(adjusted);
 }
 
 function sortUnique(values: Array<string | null | undefined>) {
@@ -403,8 +439,8 @@ function compareIdeas(a: StudyTrackerIdea, b: StudyTrackerIdea, key: SortKey) {
       return compareNullableString(a.status, b.status);
     case "tracking_return_pct":
       return compareNullableNumber(a.tracking_return_pct, b.tracking_return_pct);
-    case "effective_target_price":
-      return compareNullableNumber(a.effective_target_price, b.effective_target_price);
+    case "remaining_upside_pct":
+      return compareNullableNumber(a.remaining_upside_pct, b.remaining_upside_pct);
     case "adoption_count":
       return compareNullableNumber(a.adoption_count, b.adoption_count);
     case "feedback_count":
@@ -574,7 +610,10 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
     }
     setSortKey(nextKey);
     setSortDirection(
-      nextKey === "tracking_return_pct" || nextKey === "adoption_count" || nextKey === "feedback_count"
+      nextKey === "tracking_return_pct" ||
+        nextKey === "remaining_upside_pct" ||
+        nextKey === "adoption_count" ||
+        nextKey === "feedback_count"
         ? "desc"
         : "asc",
     );
@@ -1396,8 +1435,8 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
                   </button>
                 </th>
                 <th className="px-3 py-3">
-                  <button type="button" onClick={() => toggleSort("effective_target_price")} className="font-medium hover:text-slate-900">
-                    목표 / 상태 {sortKey === "effective_target_price" ? (sortDirection === "asc" ? "↑" : "↓") : ""}
+                  <button type="button" onClick={() => toggleSort("remaining_upside_pct")} className="font-medium hover:text-slate-900">
+                    업사이드 {sortKey === "remaining_upside_pct" ? (sortDirection === "asc" ? "↑" : "↓") : ""}
                   </button>
                 </th>
                 <th className="px-3 py-3">요약</th>
@@ -1432,7 +1471,7 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
                     {idea.sector && <div className="mt-1 text-xs text-slate-400">{idea.sector}</div>}
                   </td>
                   <td className="px-3 py-3 whitespace-nowrap text-slate-700">{formatCompactDate(idea.presented_at)}</td>
-                  <td className="px-3 py-3 text-slate-700">{idea.presenter}</td>
+                  <td className="px-3 py-3 whitespace-nowrap text-slate-700">{idea.presenter}</td>
                   <td className="px-3 py-3 whitespace-nowrap">
                     <span className="inline-flex whitespace-nowrap rounded-full bg-slate-100 px-2.5 py-1 text-xs text-slate-700">
                       {directionLabel(idea.call_direction)}
@@ -1448,22 +1487,11 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
                   </td>
                   <td className="px-3 py-3">
                     <div className="text-sm font-medium text-slate-900">
-                      {formatPrice(idea.current_price, idea.currency)} {"->"} {formatPrice(idea.effective_target_price, idea.currency)}
+                      {displayRemainingMovePct(idea)}
                     </div>
-                    <div className="mt-1 flex flex-wrap items-center gap-2">
-                      {idea.remaining_upside_pct !== null && (
-                        <span className={`text-xs ${toneClass(idea.remaining_upside_pct)}`}>
-                          잔여 업사이드 {formatPct(idea.remaining_upside_pct)}
-                        </span>
-                      )}
-                      {shouldShowTargetBadge(idea) && (
-                        <span
-                          className={`rounded-full border px-2 py-0.5 text-[11px] font-medium ${targetStatusTone(idea)}`}
-                        >
-                          {describeTargetStatus(idea)}
-                        </span>
-                      )}
-                    </div>
+                    {formatUpsideSummary(idea) ? (
+                      <div className="mt-1 text-xs text-slate-500">{formatUpsideSummary(idea)}</div>
+                    ) : null}
                   </td>
                   <td className="max-w-[320px] px-3 py-3 text-xs text-slate-600">
                     <div className="line-clamp-2">{summarizeIdea(idea)}</div>

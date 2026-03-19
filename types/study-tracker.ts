@@ -9,12 +9,12 @@ export type StudyTargetStatus =
   | "trim_or_hold"
   | "closed"
   | "invalidated";
-export type StudySessionStance = "bullish" | "watch" | "neutral" | "avoid";
+export type StudySessionStance = "long" | "short" | "neutral";
 export type StudySessionFollowUpStatus =
+  | "watching"
   | "waiting_event"
   | "ready_for_call"
-  | "dropped"
-  | "converted";
+  | "archived";
 export type StudyCallFeedbackStance = "agree" | "neutral" | "disagree";
 export type StudyCallUpdateType = "update" | "catalyst" | "risk" | "postmortem";
 
@@ -89,7 +89,10 @@ export interface StudySessionCompanyRow {
   current_price: string | null;
   currency: "KRW" | "USD" | null;
   session_stance: StudySessionStance;
+  summary_line: string | null;
   mention_reason: string | null;
+  checkpoint_note: string | null;
+  risk_note: string | null;
   follow_up_status: StudySessionFollowUpStatus;
   next_event_date: string | null;
   note: string | null;
@@ -175,7 +178,10 @@ export interface StudySessionCompany {
   current_price: number | null;
   currency: "KRW" | "USD" | null;
   session_stance: StudySessionStance;
+  summary_line: string | null;
   mention_reason: string | null;
+  checkpoint_note: string | null;
+  risk_note: string | null;
   follow_up_status: StudySessionFollowUpStatus;
   next_event_date: string | null;
   note: string | null;
@@ -317,7 +323,10 @@ export interface StudySessionCompanyInput {
   current_price?: number | null;
   currency?: "KRW" | "USD" | null;
   session_stance?: StudySessionStance | null;
+  summary_line?: string | null;
   mention_reason?: string | null;
+  checkpoint_note?: string | null;
+  risk_note?: string | null;
   follow_up_status?: StudySessionFollowUpStatus | null;
   next_event_date?: string | null;
   note?: string | null;
