@@ -20,6 +20,7 @@ import type {
   FxRateRow,
   Instrument,
   JobRunInsert,
+  JobRunRow,
   OrderFillRow,
   OrderRow,
   ParticipantNotesBundle,
@@ -222,6 +223,26 @@ export async function insertJobRun(row: JobRunInsert) {
   const supabase = getAdminSupabase();
   const { error } = await supabase.from("job_runs").insert(row);
   if (error) throw error;
+}
+
+export async function getLatestJobRuns(jobNames: string[]): Promise<JobRunRow[]> {
+  if (jobNames.length === 0) return [];
+  const supabase = getAdminSupabase();
+  const { data, error } = await supabase
+    .from("job_runs")
+    .select("*")
+    .in("job_name", jobNames)
+    .order("run_at", { ascending: false });
+  if (error) throw error;
+
+  const out: JobRunRow[] = [];
+  const seen = new Set<string>();
+  for (const row of (data ?? []) as JobRunRow[]) {
+    if (seen.has(row.job_name)) continue;
+    seen.add(row.job_name);
+    out.push(row);
+  }
+  return out;
 }
 
 export async function insertAuditLog(row: AuditLogInsert) {
@@ -566,6 +587,19 @@ export async function getStudyTrackerIdeas(): Promise<StudyTrackerIdeaRow[]> {
   return (data ?? []) as StudyTrackerIdeaRow[];
 }
 
+export async function getStudyTrackerIdeaById(ideaId: number): Promise<StudyTrackerIdeaRow | null> {
+  const supabase = getAdminSupabase();
+  const { data, error } = await supabase
+    .from("study_tracker_ideas")
+    .select("*")
+    .eq("id", ideaId)
+    .maybeSingle();
+  if (error) {
+    throw toErrorWithMessage(error, "Failed to read study tracker idea");
+  }
+  return (data as StudyTrackerIdeaRow | null) ?? null;
+}
+
 function normalizeStudyTrackerIdeaInput(input: StudyTrackerIdeaInput) {
   const isIncluded = Boolean(input.is_included);
   return {
@@ -576,6 +610,10 @@ function normalizeStudyTrackerIdeaInput(input: StudyTrackerIdeaInput) {
     sector: input.sector?.trim() || null,
     pitch_price: input.pitch_price ?? null,
     target_price: input.target_price ?? null,
+    current_target_price: input.current_target_price ?? null,
+    target_status: input.target_status ?? null,
+    target_updated_at: input.target_updated_at ?? null,
+    target_note: input.target_note?.trim() || null,
     pitch_upside_pct: input.pitch_upside_pct ?? null,
     currency: input.currency ?? null,
     current_price: input.current_price ?? null,
@@ -600,7 +638,7 @@ function normalizeStudyTrackerIdeaInput(input: StudyTrackerIdeaInput) {
     exited_price: isIncluded ? input.exited_price ?? null : null,
     source_session_id: input.source_session_id ?? null,
     source_coverage_id: input.source_coverage_id ?? null,
-    call_direction: input.call_direction ?? "long",
+    call_direction: input.call_direction ?? "neutral",
     conviction_score: input.conviction_score ?? null,
     invalidation_rule: input.invalidation_rule?.trim() || null,
     time_horizon: input.time_horizon?.trim() || null,
@@ -682,6 +720,11 @@ function normalizeStudySessionCompanyInput(input: StudySessionCompanyInput) {
     company_name: input.company_name.trim(),
     ticker: input.ticker.trim(),
     sector: input.sector?.trim() || null,
+    target_price: input.target_price ?? null,
+    reference_price: input.reference_price ?? null,
+    reference_price_date: input.reference_price_date ?? null,
+    current_price: input.current_price ?? null,
+    currency: input.currency ?? null,
     session_stance: input.session_stance ?? "watch",
     mention_reason: input.mention_reason?.trim() || null,
     follow_up_status: input.follow_up_status ?? "waiting_event",

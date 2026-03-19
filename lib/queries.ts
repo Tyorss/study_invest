@@ -1,7 +1,9 @@
 import { buildBenchmarkReturnByDate } from "@/lib/benchmarks";
 import {
   getBenchmarkByCode,
+  getLatestJobRuns,
   getParticipantNotes,
+  getStudySessionCompanies,
   getStudyTrackerIdeas,
   getBenchmarkPriceSeries,
   getParticipantsWithPortfolios,
@@ -20,6 +22,7 @@ import { addDays } from "@/lib/time";
 import type {
   LeaderboardInstrumentsRow,
   LeaderboardRow,
+  Market,
   MissingPriceHoldingRow,
   RankedInstrumentStat,
 } from "@/types/db";
@@ -712,4 +715,139 @@ export async function fetchMissingPriceHoldings(): Promise<MissingPriceHoldingRo
       a.participant_name.localeCompare(b.participant_name, "ko-KR") ||
       a.symbol.localeCompare(b.symbol, "ko-KR"),
     );
+}
+
+export type MissingPriceItem = {
+  source: "portfolio" | "study_tracker" | "free_topic";
+  source_label: string;
+  symbol: string;
+  name: string;
+  market: Market | null;
+  currency: "KRW" | "USD" | null;
+  owner_id: string | null;
+  owner_label: string | null;
+  valuation_date: string | null;
+  fallback_value: number | null;
+  reason: string | null;
+};
+
+function parseFailureList(value: unknown) {
+  return Array.isArray(value) ? value : [];
+}
+
+export async function fetchMissingPriceOverview(): Promise<{
+  uniqueCount: number;
+  items: MissingPriceItem[];
+}> {
+  const [holdingRows, trackerRows, sessionRows, latestRuns] = await Promise.all([
+    fetchMissingPriceHoldings(),
+    getStudyTrackerIdeas(),
+    getStudySessionCompanies(),
+    getLatestJobRuns([
+      "refresh_study_tracker_prices",
+      "refresh_study_session_company_prices",
+    ]),
+  ]);
+
+  const trackerMap = new Map(
+    trackerRows.map((row) => [
+      Number(row.id),
+      {
+        symbol: row.ticker,
+        name: row.company_name,
+        market: /^\d{6}$/.test(row.ticker.replace(/^KRX:|^KOSDAQ:/, "")) ? ("KR" as const) : ("US" as const),
+        currency: row.currency ?? null,
+      },
+    ]),
+  );
+
+  const sessionMap = new Map(
+    sessionRows.map((row) => [
+      Number(row.id),
+      {
+        symbol: row.ticker,
+        name: row.company_name,
+        market: /^\d{6}$/.test(row.ticker.replace(/^KRX:|^KOSDAQ:/, "")) ? ("KR" as const) : ("US" as const),
+        currency: row.currency ?? null,
+      },
+    ]),
+  );
+
+  const trackerRun = latestRuns.find((row) => row.job_name === "refresh_study_tracker_prices");
+  const freeTopicRun = latestRuns.find((row) => row.job_name === "refresh_study_session_company_prices");
+
+  const items: MissingPriceItem[] = holdingRows.map((row) => ({
+    source: "portfolio",
+    source_label: "보유 종목",
+    symbol: row.symbol,
+    name: row.name,
+    market: row.market,
+    currency: row.currency,
+    owner_id: row.participant_id,
+    owner_label: row.participant_name,
+    valuation_date: row.valuation_date,
+    fallback_value: row.fallback_mark_local,
+    reason: "실제 시세를 찾지 못해 평균단가로 계산 중입니다.",
+  }));
+
+  for (const failure of parseFailureList(trackerRun?.metrics_json?.failure_details)) {
+    const ideaId = Number((failure as { idea_id?: unknown }).idea_id);
+    const ticker = String((failure as { ticker?: unknown }).ticker ?? "");
+    const reason =
+      typeof (failure as { reason?: unknown }).reason === "string"
+        ? (failure as { reason: string }).reason
+        : null;
+    const meta = trackerMap.get(ideaId);
+    items.push({
+      source: "study_tracker",
+      source_label: "스터디 정리",
+      symbol: meta?.symbol ?? ticker,
+      name: meta?.name ?? ticker,
+      market: meta?.market ?? null,
+      currency: meta?.currency ?? null,
+      owner_id: null,
+      owner_label: null,
+      valuation_date: trackerRun?.target_date ?? null,
+      fallback_value: null,
+      reason,
+    });
+  }
+
+  for (const failure of parseFailureList(freeTopicRun?.metrics_json?.failure_details)) {
+    const companyId = Number((failure as { company_id?: unknown }).company_id);
+    const ticker = String((failure as { ticker?: unknown }).ticker ?? "");
+    const reason =
+      typeof (failure as { reason?: unknown }).reason === "string"
+        ? (failure as { reason: string }).reason
+        : null;
+    const meta = sessionMap.get(companyId);
+    items.push({
+      source: "free_topic",
+      source_label: "자유 종목",
+      symbol: meta?.symbol ?? ticker,
+      name: meta?.name ?? ticker,
+      market: meta?.market ?? null,
+      currency: meta?.currency ?? null,
+      owner_id: null,
+      owner_label: null,
+      valuation_date: freeTopicRun?.target_date ?? null,
+      fallback_value: null,
+      reason,
+    });
+  }
+
+  const uniqueCount = new Set(
+    items
+      .map((item) => `${item.market ?? "-"}:${item.symbol.trim().toUpperCase()}`)
+      .filter((value) => value.length > 0),
+  ).size;
+
+  return {
+    uniqueCount,
+    items: items.sort(
+      (a, b) =>
+        a.symbol.localeCompare(b.symbol, "ko-KR") ||
+        a.source_label.localeCompare(b.source_label, "ko-KR"),
+    ),
+  };
 }

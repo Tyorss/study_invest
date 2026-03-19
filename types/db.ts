@@ -217,6 +217,16 @@ export interface JobRunInsert {
   metrics_json: Record<string, unknown>;
 }
 
+export interface JobRunRow {
+  id: number;
+  job_name: string;
+  target_date: string;
+  status: "success" | "partial" | "failed";
+  error_message: string | null;
+  metrics_json: Record<string, unknown>;
+  run_at: string;
+}
+
 export interface AuditLogInsert {
   entity_type: "ORDER" | "FILL" | "TRADE" | "CORP_ACTION" | "NOTES" | "SYSTEM";
   entity_id: string;

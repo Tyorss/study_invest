@@ -1,7 +1,8 @@
 import { resolveMarketDataProviders } from "@/lib/providers";
 import { todayInSeoul } from "@/lib/time";
 import type { Currency, Market } from "@/types/db";
-import type { StudyTrackerIdeaInput } from "@/types/study-tracker";
+import type { DailyClosePoint } from "@/lib/providers/types";
+import type { StudySessionCompanyInput, StudyTrackerIdeaInput } from "@/types/study-tracker";
 
 function ratioFrom(current: number | null | undefined, base: number | null | undefined) {
   if (current === null || current === undefined) return null;
@@ -9,7 +10,17 @@ function ratioFrom(current: number | null | undefined, base: number | null | und
   return current / base - 1;
 }
 
-function inferQuoteTarget(
+function inferStudyCallDirection(
+  targetPrice: number | null | undefined,
+  basePrice: number | null | undefined,
+) {
+  const diff = ratioFrom(targetPrice ?? null, basePrice ?? null);
+  if (diff === null) return "neutral" as const;
+  if (Math.abs(diff) <= 0.1) return "neutral" as const;
+  return diff > 0 ? ("long" as const) : ("short" as const);
+}
+
+export function resolveStudyQuoteTarget(
   ticker: string,
   currency: Currency | null | undefined,
 ): {
@@ -74,18 +85,33 @@ async function fetchCurrentPrice(input: {
   symbol: string;
   market: Market;
   providerSymbol?: string;
+  date?: string;
 }): Promise<{ price: number | null; warning: string | null }> {
+  const point = await fetchClosePointOnOrBefore({
+    symbol: input.symbol,
+    market: input.market,
+    providerSymbol: input.providerSymbol,
+    date: input.date ?? todayInSeoul(),
+  });
+  return { price: point.point?.close ?? null, warning: point.warning };
+}
+
+async function fetchClosePointOnOrBefore(input: {
+  symbol: string;
+  market: Market;
+  providerSymbol?: string;
+  date: string;
+}): Promise<{ point: DailyClosePoint | null; warning: string | null }> {
   let resolved;
   try {
     resolved = resolveMarketDataProviders();
   } catch (err) {
     return {
-      price: null,
+      point: null,
       warning: err instanceof Error ? err.message : "Failed to load market data providers",
     };
   }
 
-  const targetDate = todayInSeoul();
   const reasons: string[] = [];
   let availableProviders = 0;
 
@@ -97,14 +123,34 @@ async function fetchCurrentPrice(input: {
     availableProviders += 1;
 
     try {
-      const close = await handle.provider.getDailyClose(
-        input.symbol,
-        input.market,
-        targetDate,
-        input.providerSymbol,
-      );
-      if (close !== null && Number.isFinite(close)) {
-        return { price: close, warning: null };
+      const point =
+        typeof handle.provider.getDailyClosePoint === "function"
+          ? await handle.provider.getDailyClosePoint(
+              input.symbol,
+              input.market,
+              input.date,
+              input.providerSymbol,
+            )
+          : null;
+      if (point !== null && Number.isFinite(point.close)) {
+        return { point, warning: null };
+      }
+      if (point === null) {
+        const close = await handle.provider.getDailyClose(
+          input.symbol,
+          input.market,
+          input.date,
+          input.providerSymbol,
+        );
+        if (close !== null && Number.isFinite(close)) {
+          return {
+            point: {
+              date: input.date,
+              close,
+            },
+            warning: null,
+          };
+        }
       }
       reasons.push(`[${handle.requestedProvider}] No close price returned`);
     } catch (err) {
@@ -116,14 +162,14 @@ async function fetchCurrentPrice(input: {
 
   if (availableProviders === 0) {
     return {
-      price: null,
+      point: null,
       warning:
         "Current price auto-update is unavailable because no market data provider is configured.",
     };
   }
 
   return {
-    price: null,
+    point: null,
     warning:
       reasons.length > 0
         ? `Current price auto-update failed. ${reasons.join(" | ")}`
@@ -131,17 +177,50 @@ async function fetchCurrentPrice(input: {
   };
 }
 
-export async function autoFillStudyTrackerIdea(input: StudyTrackerIdeaInput): Promise<{
+export async function fetchStudyQuotePointOnOrBefore(input: {
+  ticker: string;
+  currency?: Currency | null;
+  date: string;
+}) {
+  const quoteTarget = resolveStudyQuoteTarget(input.ticker, input.currency ?? null);
+  if (!quoteTarget) {
+    return {
+      point: null as DailyClosePoint | null,
+      warning: null,
+      quoteTarget: null,
+    };
+  }
+
+  const result = await fetchClosePointOnOrBefore({
+    symbol: quoteTarget.symbol,
+    market: quoteTarget.market,
+    providerSymbol: quoteTarget.providerSymbol,
+    date: input.date,
+  });
+
+  return {
+    ...result,
+    quoteTarget,
+  };
+}
+
+export async function autoFillStudyTrackerIdea(
+  input: StudyTrackerIdeaInput,
+  options?: { quoteDate?: string; skipQuoteFetch?: boolean },
+): Promise<{
   input: StudyTrackerIdeaInput;
   warning: string | null;
 }> {
-  const quoteTarget = inferQuoteTarget(input.ticker, input.currency ?? null);
+  const quoteTarget = resolveStudyQuoteTarget(input.ticker, input.currency ?? null);
   let currentPrice = input.current_price ?? null;
   let warning: string | null = null;
   let currency = input.currency ?? quoteTarget?.currency ?? null;
 
-  if (quoteTarget) {
-    const quote = await fetchCurrentPrice(quoteTarget);
+  if (quoteTarget && !options?.skipQuoteFetch) {
+    const quote = await fetchCurrentPrice({
+      ...quoteTarget,
+      date: options?.quoteDate,
+    });
     if (quote.price !== null) {
       currentPrice = quote.price;
     } else if (!currentPrice && quote.warning) {
@@ -163,6 +242,8 @@ export async function autoFillStudyTrackerIdea(input: StudyTrackerIdeaInput): Pr
   const positionStatus = isIncluded
     ? input.position_status ?? (input.exited_at || input.exited_price ? "closed" : "active")
     : null;
+  const effectiveTarget = input.current_target_price ?? input.target_price ?? null;
+  const callDirection = input.call_direction ?? inferStudyCallDirection(effectiveTarget, input.pitch_price);
 
   return {
     input: {
@@ -180,7 +261,49 @@ export async function autoFillStudyTrackerIdea(input: StudyTrackerIdeaInput): Pr
       position_status: positionStatus,
       exited_at: isIncluded ? input.exited_at ?? null : null,
       exited_price: isIncluded ? input.exited_price ?? null : null,
+      call_direction: callDirection,
+      target_status: input.target_status ?? null,
+      current_target_price: input.current_target_price ?? null,
+      target_updated_at: input.target_updated_at ?? null,
+      target_note: input.target_note ?? null,
     },
     warning,
+  };
+}
+
+export async function autoFillStudySessionCompany(input: StudySessionCompanyInput, presentedAt: string) {
+  const quoteTarget = resolveStudyQuoteTarget(input.ticker, input.currency ?? null);
+  if (!quoteTarget) {
+    return { input, warning: null };
+  }
+
+  const [referenceQuote, currentQuote] = await Promise.all([
+    fetchClosePointOnOrBefore({
+      symbol: quoteTarget.symbol,
+      market: quoteTarget.market,
+      providerSymbol: quoteTarget.providerSymbol,
+      date: presentedAt,
+    }),
+    fetchClosePointOnOrBefore({
+      symbol: quoteTarget.symbol,
+      market: quoteTarget.market,
+      providerSymbol: quoteTarget.providerSymbol,
+      date: todayInSeoul(),
+    }),
+  ]);
+
+  const warnings = [referenceQuote.warning, currentQuote.warning].filter(
+    (value): value is string => Boolean(value?.trim()),
+  );
+
+  return {
+    input: {
+      ...input,
+      currency: input.currency ?? quoteTarget.currency ?? null,
+      reference_price: input.reference_price ?? referenceQuote.point?.close ?? null,
+      reference_price_date: input.reference_price_date ?? referenceQuote.point?.date ?? null,
+      current_price: input.current_price ?? currentQuote.point?.close ?? null,
+    },
+    warning: warnings.length > 0 ? warnings.join(" | ") : null,
   };
 }

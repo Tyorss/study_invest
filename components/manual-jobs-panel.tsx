@@ -22,6 +22,22 @@ type JobResult = {
     successCount?: number;
     failures?: Array<unknown>;
   };
+  studyTracker?: {
+    status?: string;
+    totalIdeas?: number;
+    refreshedCount?: number;
+    pricedCount?: number;
+    warnings?: Array<unknown>;
+    failures?: Array<unknown>;
+  };
+  freeTopics?: {
+    status?: string;
+    totalCompanies?: number;
+    refreshedCount?: number;
+    pricedCount?: number;
+    warnings?: Array<unknown>;
+    failures?: Array<unknown>;
+  };
   status?: string;
   successCount?: number;
   failures?: Array<unknown>;
@@ -37,7 +53,8 @@ type ManualJobResponse = {
 
 function translateError(message: string) {
   if (message.includes("Unauthorized")) return "운영 비밀번호가 맞지 않습니다.";
-  if (message.includes("CRON_SECRET is not configured")) return "서버에 운영 비밀번호가 설정되지 않았습니다.";
+  if (message.includes("ADMIN_JOB_SECRET is not configured"))
+    return "서버에 운영 비밀번호가 설정되지 않았습니다.";
   if (message.includes("Invalid JSON body")) return "요청 형식이 올바르지 않습니다.";
   if (message.includes("Invalid job type")) return "실행할 작업 종류가 올바르지 않습니다.";
   if (message.includes("date must be YYYY-MM-DD")) return "날짜 형식은 YYYY-MM-DD여야 합니다.";
@@ -53,11 +70,25 @@ function buildSummary(job: JobName, targetDate: string, result: JobResult | unde
     const prices = result.prices;
     const fx = result.fx;
     const snapshots = result.snapshots;
+    const studyTracker = result.studyTracker;
+    const freeTopics = result.freeTopics;
     return [
       `${targetDate} 기준 일일 업데이트를 실행했습니다.`,
       prices?.rows !== undefined ? `가격 ${prices.rows}건 처리` : null,
       fx?.status ? `환율 ${fx.status}` : null,
       snapshots?.successCount !== undefined ? `스냅샷 ${snapshots.successCount}명 반영` : null,
+      studyTracker?.refreshedCount !== undefined
+        ? `스터디 종목 ${studyTracker.refreshedCount}건 갱신`
+        : null,
+      studyTracker?.failures && studyTracker.failures.length > 0
+        ? `미조회 ${studyTracker.failures.length}건`
+        : null,
+      freeTopics?.refreshedCount !== undefined
+        ? `자유 종목 ${freeTopics.refreshedCount}건 갱신`
+        : null,
+      freeTopics?.failures && freeTopics.failures.length > 0
+        ? `자유 종목 미조회 ${freeTopics.failures.length}건`
+        : null,
     ]
       .filter(Boolean)
       .join(" · ");
@@ -124,6 +155,9 @@ export function ManualJobsPanel({
           <h2 className="text-base font-semibold text-slate-900">운영자용 업데이트 도구</h2>
           <p className="mt-1 text-sm text-slate-600">
             일반 사용자용 화면이 아니라 운영자가 가격, 환율, 스냅샷을 수동으로 다시 돌릴 때 사용하는 메뉴입니다.
+          </p>
+          <p className="mt-1 text-xs text-slate-500">
+            별도 설정이 있으면 <code>ADMIN_JOB_SECRET</code>를, 없으면 기존 <code>CRON_SECRET</code>를 사용합니다.
           </p>
         </div>
 

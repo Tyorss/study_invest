@@ -16,12 +16,14 @@ import type {
   StudyCallUpdate,
   StudySession,
   StudySessionCompany,
+  StudySessionCompanyInput,
   StudySessionCompanyRow,
   StudySessionData,
   StudySessionRow,
   StudyTrackerBenchmarkCode,
   StudyTrackerData,
   StudyTrackerIdea,
+  StudyTrackerIdeaInput,
   StudyTrackerIdeaRow,
   StudyTrackerLinkedTrade,
   StudyTrackerPortfolioData,
@@ -38,6 +40,40 @@ function toNumber(value: string | number | null | undefined) {
 function ratioFrom(endValue: number | null, startValue: number | null) {
   if (endValue === null || startValue === null || startValue <= 0) return null;
   return endValue / startValue - 1;
+}
+
+function inferCallDirection(
+  targetPrice: number | null,
+  basePrice: number | null,
+  storedDirection: string | null,
+) {
+  const diff = ratioFrom(targetPrice, basePrice);
+  if (diff !== null) {
+    if (Math.abs(diff) <= 0.1) return "neutral" as const;
+    return diff > 0 ? ("long" as const) : ("short" as const);
+  }
+  if (storedDirection === "long" || storedDirection === "neutral" || storedDirection === "short") {
+    return storedDirection;
+  }
+  return "neutral" as const;
+}
+
+function resolveEffectiveTargetStatus(
+  targetStatus: string | null,
+): "active" | "target_hit" | "revising" | "upgraded" | "downgraded" | "trim_or_hold" | "closed" | "invalidated" {
+  if (
+    targetStatus === "active" ||
+    targetStatus === "target_hit" ||
+    targetStatus === "revising" ||
+    targetStatus === "upgraded" ||
+    targetStatus === "downgraded" ||
+    targetStatus === "trim_or_hold" ||
+    targetStatus === "closed" ||
+    targetStatus === "invalidated"
+  ) {
+    return targetStatus;
+  }
+  return "active";
 }
 
 export function computeStudyTrackerPortfolioReturn(idea: {
@@ -69,13 +105,18 @@ function normalizeWeight(weight: number | null) {
   return weight !== null && Number.isFinite(weight) && weight > 0 ? weight : 1;
 }
 
-function mapStudySessionCompany(row: StudySessionCompanyRow): StudySessionCompany {
+export function mapStudySessionCompany(row: StudySessionCompanyRow): StudySessionCompany {
   return {
     id: row.id,
     session_id: row.session_id,
     company_name: row.company_name,
     ticker: row.ticker,
     sector: row.sector ?? null,
+    target_price: toNumber(row.target_price),
+    reference_price: toNumber(row.reference_price),
+    reference_price_date: row.reference_price_date ?? null,
+    current_price: toNumber(row.current_price),
+    currency: row.currency ?? null,
     session_stance: row.session_stance,
     mention_reason: row.mention_reason ?? null,
     follow_up_status: row.follow_up_status,
@@ -85,7 +126,7 @@ function mapStudySessionCompany(row: StudySessionCompanyRow): StudySessionCompan
   };
 }
 
-function mapStudySession(row: StudySessionRow): StudySession {
+export function mapStudySession(row: StudySessionRow): StudySession {
   return {
     id: row.id,
     presented_at: row.presented_at,
@@ -99,6 +140,25 @@ function mapStudySession(row: StudySessionRow): StudySession {
     covered_count: 0,
     converted_count: 0,
     adoption_count: 0,
+  };
+}
+
+export function toStudySessionCompanyInput(company: StudySessionCompany): StudySessionCompanyInput {
+  return {
+    session_id: company.session_id,
+    company_name: company.company_name,
+    ticker: company.ticker,
+    sector: company.sector,
+    target_price: company.target_price,
+    reference_price: company.reference_price,
+    reference_price_date: company.reference_price_date,
+    current_price: company.current_price,
+    currency: company.currency,
+    session_stance: company.session_stance,
+    mention_reason: company.mention_reason,
+    follow_up_status: company.follow_up_status,
+    next_event_date: company.next_event_date,
+    note: company.note,
   };
 }
 
@@ -120,13 +180,17 @@ function mapLinkedTrade(row: Awaited<ReturnType<typeof getStudyLinkedTrades>>[nu
 export function mapStudyTrackerIdea(row: StudyTrackerIdeaRow): StudyTrackerIdea {
   const pitchPrice = toNumber(row.pitch_price);
   const targetPrice = toNumber(row.target_price);
+  const currentTargetPrice = toNumber(row.current_target_price);
+  const effectiveTargetPrice = currentTargetPrice ?? targetPrice;
+  const effectiveTargetStatus = resolveEffectiveTargetStatus(row.target_status);
   const includedPrice = toNumber(row.included_price);
   const currentPrice = toNumber(row.current_price);
   const exitedPrice = toNumber(row.exited_price);
   const closeReturn = toNumber(row.close_return_pct);
   const currentReturn = ratioFrom(currentPrice, pitchPrice);
-  const currentUpside = ratioFrom(targetPrice, currentPrice);
+  const currentUpside = ratioFrom(effectiveTargetPrice, currentPrice);
   const pitchUpside = ratioFrom(targetPrice, pitchPrice);
+  const remainingUpside = ratioFrom(effectiveTargetPrice, currentPrice);
   const inferredIncluded =
     Boolean(row.is_included) ||
     ((!row.included_at &&
@@ -144,6 +208,11 @@ export function mapStudyTrackerIdea(row: StudyTrackerIdeaRow): StudyTrackerIdea 
     : null;
   const resolvedExitedAt =
     positionStatus === "closed" ? row.exited_at ?? row.exit_date ?? null : null;
+  const needsTargetUpdate =
+    currentPrice !== null &&
+    effectiveTargetPrice !== null &&
+    currentPrice >= effectiveTargetPrice &&
+    effectiveTargetStatus === "active";
 
   return {
     id: row.id,
@@ -154,6 +223,14 @@ export function mapStudyTrackerIdea(row: StudyTrackerIdeaRow): StudyTrackerIdea 
     sector: row.sector ?? null,
     pitch_price: pitchPrice,
     target_price: targetPrice,
+    current_target_price: currentTargetPrice,
+    effective_target_price: effectiveTargetPrice,
+    target_status: row.target_status ?? null,
+    effective_target_status: effectiveTargetStatus,
+    target_updated_at: row.target_updated_at ?? null,
+    target_note: row.target_note ?? null,
+    remaining_upside_pct: remainingUpside,
+    needs_target_update: needsTargetUpdate,
     pitch_upside_pct: pitchUpside,
     currency: row.currency ?? null,
     current_price: currentPrice,
@@ -185,7 +262,7 @@ export function mapStudyTrackerIdea(row: StudyTrackerIdeaRow): StudyTrackerIdea 
     }),
     source_session_id: row.source_session_id ?? null,
     source_coverage_id: row.source_coverage_id ?? null,
-    call_direction: row.call_direction ?? "long",
+    call_direction: inferCallDirection(effectiveTargetPrice, pitchPrice, row.call_direction),
     conviction_score: row.conviction_score ?? null,
     invalidation_rule: row.invalidation_rule ?? null,
     time_horizon: row.time_horizon ?? null,
@@ -198,6 +275,50 @@ export function mapStudyTrackerIdea(row: StudyTrackerIdeaRow): StudyTrackerIdea 
     update_count: 0,
     linked_trade_count: 0,
     adoption_count: 0,
+  };
+}
+
+export function toStudyTrackerIdeaInput(idea: StudyTrackerIdea): StudyTrackerIdeaInput {
+  return {
+    presented_at: idea.presented_at,
+    presenter: idea.presenter,
+    company_name: idea.company_name,
+    ticker: idea.ticker,
+    sector: idea.sector,
+    pitch_price: idea.pitch_price,
+    target_price: idea.target_price,
+    current_target_price: idea.current_target_price,
+    target_status: idea.target_status,
+    target_updated_at: idea.target_updated_at,
+    target_note: idea.target_note,
+    pitch_upside_pct: idea.pitch_upside_pct,
+    currency: idea.currency,
+    current_price: idea.current_price,
+    current_upside_pct: idea.current_upside_pct,
+    current_return_pct: idea.current_return_pct,
+    thesis: idea.thesis,
+    trigger: idea.trigger,
+    risk: idea.risk,
+    style: idea.style,
+    status: idea.status,
+    entry_date: idea.entry_date,
+    exit_date: idea.exit_date,
+    close_return_pct: idea.close_return_pct,
+    note: idea.note,
+    tracking_return_pct: idea.tracking_return_pct,
+    is_included: idea.is_included,
+    included_at: idea.included_at,
+    included_price: idea.included_price,
+    weight: idea.weight,
+    position_status: idea.position_status,
+    exited_at: idea.exited_at,
+    exited_price: idea.exited_price,
+    source_session_id: idea.source_session_id,
+    source_coverage_id: idea.source_coverage_id,
+    call_direction: idea.call_direction,
+    conviction_score: idea.conviction_score,
+    invalidation_rule: idea.invalidation_rule,
+    time_horizon: idea.time_horizon,
   };
 }
 

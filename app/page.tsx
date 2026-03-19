@@ -2,7 +2,7 @@ import Link from "next/link";
 import { LeaderboardInstrumentsTable } from "@/components/leaderboard-instruments-table";
 import { LeaderboardTable } from "@/components/leaderboard-table";
 import { RankToggle } from "@/components/rank-toggle";
-import { fetchLeaderboard, fetchMissingPriceHoldings } from "@/lib/queries";
+import { fetchLeaderboard, fetchMissingPriceOverview } from "@/lib/queries";
 
 export const dynamic = "force-dynamic";
 
@@ -12,9 +12,9 @@ export default async function Home({
   searchParams?: { rank?: string };
 }) {
   const rank = searchParams?.rank === "sharpe" ? "sharpe" : "return";
-  const [{ date, rows, instrumentRows }, missingPriceRows] = await Promise.all([
+  const [{ date, rows, instrumentRows }, missingPriceOverview] = await Promise.all([
     fetchLeaderboard(rank),
-    fetchMissingPriceHoldings(),
+    fetchMissingPriceOverview(),
   ]);
   const leader = [...rows].sort((a, b) => b.total_return_pct - a.total_return_pct)[0] ?? null;
   const avgReturn =
@@ -121,10 +121,12 @@ export default async function Home({
           <Link
             href="/admin/missing-prices"
             className={`hover:underline ${
-              missingPriceRows.length > 0 ? "font-medium text-rose-600 hover:text-rose-700" : "text-slate-400 hover:text-slate-600"
+              missingPriceOverview.uniqueCount > 0
+                ? "font-medium text-rose-600 hover:text-rose-700"
+                : "text-slate-400 hover:text-slate-600"
             }`}
           >
-            현재가 미조회 종목 {missingPriceRows.length}개
+            전체 미조회 종목 {missingPriceOverview.uniqueCount}개
           </Link>
           <Link href="/admin/jobs" className="text-slate-400 hover:text-slate-600 hover:underline">
             운영자용 업데이트 도구

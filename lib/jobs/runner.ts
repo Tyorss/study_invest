@@ -9,17 +9,33 @@ import {
   getBenchmarkByCode,
   getBenchmarkPriceSeries,
   getFxPointOnOrBefore,
+  getInstrumentBySymbolMarket,
   getGameStartDate,
   getParticipantsWithPortfolios,
   getPricePointOnOrBefore,
+  getStudySessionCompanies,
+  getStudyTrackerIdeas,
   insertJobRun,
   upsertDailySnapshot,
   upsertFx,
   upsertPrice,
+  updateStudySessionCompany,
+  updateStudyTrackerIdea,
 } from "@/lib/db";
 import { buildDailySnapshot, createValueCache } from "@/lib/engine/snapshot";
 import { resolveMarketDataProviders } from "@/lib/providers";
 import type { ProviderHandle } from "@/lib/providers";
+import {
+  autoFillStudyTrackerIdea,
+  fetchStudyQuotePointOnOrBefore,
+  resolveStudyQuoteTarget,
+} from "@/lib/study-tracker-auto";
+import {
+  mapStudySessionCompany,
+  mapStudyTrackerIdea,
+  toStudySessionCompanyInput,
+  toStudyTrackerIdeaInput,
+} from "@/lib/study-tracker";
 import type { Instrument } from "@/types/db";
 import { dateRange, yesterdayInSeoul } from "@/lib/time";
 
@@ -495,11 +511,262 @@ export async function generateSnapshotsForDate(targetDate: string) {
   }
 }
 
+export async function refreshStudyTrackerIdeasForDate(targetDate: string) {
+  try {
+    const rows = await getStudyTrackerIdeas();
+    const ideas = rows.map(mapStudyTrackerIdea);
+    const warnings: Array<{ idea_id: number; ticker: string; reason: string }> = [];
+    const failures: Array<{ idea_id: number; ticker: string; reason: string }> = [];
+    let refreshedCount = 0;
+    let pricedCount = 0;
+
+    for (const idea of ideas) {
+      try {
+        let seededPrice: number | null = null;
+        let usedPriceTable = false;
+        let warning: string | null = null;
+        const quoteTarget = resolveStudyQuoteTarget(idea.ticker, idea.currency);
+
+        if (quoteTarget) {
+          const instrument = await getInstrumentBySymbolMarket(quoteTarget.symbol, quoteTarget.market);
+          if (instrument) {
+            const pricePoint = await getPricePointOnOrBefore(instrument.id, targetDate);
+            if (pricePoint) {
+              seededPrice = pricePoint.close;
+              usedPriceTable = true;
+              if (pricePoint.date !== targetDate || pricePoint.source === "carry_forward") {
+                warning = `${pricePoint.date} 기준 종가를 사용했습니다.`;
+              }
+            }
+          }
+        }
+
+        if (!usedPriceTable && quoteTarget) {
+          const providerQuote = await fetchStudyQuotePointOnOrBefore({
+            ticker: idea.ticker,
+            currency: idea.currency,
+            date: targetDate,
+          });
+          if (providerQuote.point?.close !== null && providerQuote.point?.close !== undefined) {
+            seededPrice = providerQuote.point.close;
+            warning = null;
+          } else if (providerQuote.warning) {
+            warning = providerQuote.warning;
+          }
+        }
+
+        const enriched = await autoFillStudyTrackerIdea(
+          {
+            ...toStudyTrackerIdeaInput(idea),
+            current_price: seededPrice ?? idea.current_price,
+          },
+          {
+            quoteDate: targetDate,
+            skipQuoteFetch: true,
+          },
+        );
+
+        await updateStudyTrackerIdea(idea.id, enriched.input);
+        refreshedCount += 1;
+
+        if (enriched.input.current_price !== null) {
+          pricedCount += 1;
+        } else {
+          failures.push({
+            idea_id: idea.id,
+            ticker: idea.ticker,
+            reason: enriched.warning ?? warning ?? "현재가를 찾지 못했습니다.",
+          });
+        }
+
+        const finalWarning = enriched.warning ?? warning;
+        if (finalWarning) {
+          warnings.push({
+            idea_id: idea.id,
+            ticker: idea.ticker,
+            reason: finalWarning,
+          });
+        }
+      } catch (err) {
+        failures.push({
+          idea_id: idea.id,
+          ticker: idea.ticker,
+          reason: err instanceof Error ? err.message : "Unknown error",
+        });
+      }
+    }
+
+    const status =
+      failures.length === 0 && warnings.length === 0
+        ? "success"
+        : failures.length < ideas.length
+          ? "partial"
+          : "failed";
+
+    await logJob(
+      "refresh_study_tracker_prices",
+      targetDate,
+      status,
+      {
+        total_ideas: ideas.length,
+        refreshed: refreshedCount,
+        priced: pricedCount,
+        warnings: warnings.length,
+        failures: failures.length,
+        warning_details: warnings,
+        failure_details: failures,
+      },
+      failures.length > 0 ? `Failed ideas: ${failures.length}` : warnings.length > 0 ? `Warnings: ${warnings.length}` : null,
+    );
+
+    return {
+      status,
+      totalIdeas: ideas.length,
+      refreshedCount,
+      pricedCount,
+      warnings,
+      failures,
+    };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Unknown error";
+    await logJob("refresh_study_tracker_prices", targetDate, "failed", { fatal: true }, msg);
+    return {
+      status: "failed" as const,
+      totalIdeas: 0,
+      refreshedCount: 0,
+      pricedCount: 0,
+      warnings: [] as Array<{ idea_id: number; ticker: string; reason: string }>,
+      failures: [{ idea_id: 0, ticker: "*", reason: msg }],
+    };
+  }
+}
+
+export async function refreshStudySessionCompaniesForDate(targetDate: string) {
+  try {
+    const rows = await getStudySessionCompanies();
+    const companies = rows.map(mapStudySessionCompany);
+    const warnings: Array<{ company_id: number; ticker: string; reason: string }> = [];
+    const failures: Array<{ company_id: number; ticker: string; reason: string }> = [];
+    let refreshedCount = 0;
+    let pricedCount = 0;
+
+    for (const company of companies) {
+      try {
+        let seededPrice: number | null = null;
+        let warning: string | null = null;
+        const quoteTarget = resolveStudyQuoteTarget(company.ticker, company.currency);
+
+        if (quoteTarget) {
+          const instrument = await getInstrumentBySymbolMarket(quoteTarget.symbol, quoteTarget.market);
+          if (instrument) {
+            const pricePoint = await getPricePointOnOrBefore(instrument.id, targetDate);
+            if (pricePoint) {
+              seededPrice = pricePoint.close;
+              if (pricePoint.date !== targetDate || pricePoint.source === "carry_forward") {
+                warning = `${pricePoint.date} 기준 종가를 사용했습니다.`;
+              }
+            }
+          }
+        }
+
+        if (seededPrice === null && quoteTarget) {
+          const providerQuote = await fetchStudyQuotePointOnOrBefore({
+            ticker: company.ticker,
+            currency: company.currency,
+            date: targetDate,
+          });
+          if (providerQuote.point?.close !== null && providerQuote.point?.close !== undefined) {
+            seededPrice = providerQuote.point.close;
+            warning = null;
+          } else if (providerQuote.warning) {
+            warning = providerQuote.warning;
+          }
+        }
+
+        await updateStudySessionCompany(company.id, {
+          ...toStudySessionCompanyInput(company),
+          current_price: seededPrice ?? company.current_price,
+        });
+        refreshedCount += 1;
+
+        if ((seededPrice ?? company.current_price) !== null) {
+          pricedCount += 1;
+        } else {
+          failures.push({
+            company_id: company.id,
+            ticker: company.ticker,
+            reason: warning ?? "현재가를 찾지 못했습니다.",
+          });
+        }
+
+        if (warning) {
+          warnings.push({
+            company_id: company.id,
+            ticker: company.ticker,
+            reason: warning,
+          });
+        }
+      } catch (err) {
+        failures.push({
+          company_id: company.id,
+          ticker: company.ticker,
+          reason: err instanceof Error ? err.message : "Unknown error",
+        });
+      }
+    }
+
+    const status =
+      failures.length === 0 && warnings.length === 0
+        ? "success"
+        : failures.length < companies.length
+          ? "partial"
+          : "failed";
+
+    await logJob(
+      "refresh_study_session_company_prices",
+      targetDate,
+      status,
+      {
+        total_companies: companies.length,
+        refreshed: refreshedCount,
+        priced: pricedCount,
+        warnings: warnings.length,
+        failures: failures.length,
+        warning_details: warnings,
+        failure_details: failures,
+      },
+      failures.length > 0 ? `Failed companies: ${failures.length}` : warnings.length > 0 ? `Warnings: ${warnings.length}` : null,
+    );
+
+    return {
+      status,
+      totalCompanies: companies.length,
+      refreshedCount,
+      pricedCount,
+      warnings,
+      failures,
+    };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Unknown error";
+    await logJob("refresh_study_session_company_prices", targetDate, "failed", { fatal: true }, msg);
+    return {
+      status: "failed" as const,
+      totalCompanies: 0,
+      refreshedCount: 0,
+      pricedCount: 0,
+      warnings: [] as Array<{ company_id: number; ticker: string; reason: string }>,
+      failures: [{ company_id: 0, ticker: "*", reason: msg }],
+    };
+  }
+}
+
 export async function runDailyPipeline(targetDate = yesterdayInSeoul()) {
   const prices = await updatePricesForDate(targetDate);
   const fx = await updateFxForDate(targetDate);
   const snapshots = await generateSnapshotsForDate(targetDate);
-  return { targetDate, prices, fx, snapshots };
+  const studyTracker = await refreshStudyTrackerIdeasForDate(targetDate);
+  const freeTopics = await refreshStudySessionCompaniesForDate(targetDate);
+  return { targetDate, prices, fx, snapshots, studyTracker, freeTopics };
 }
 
 export async function backfillPrices(startDate: string, endDate: string) {
