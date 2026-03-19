@@ -16,11 +16,21 @@ type Props = {
 
 function normalizeRows(initialLines: Props["initialLines"]): NoteLine[] {
   return initialLines.length > 0
-    ? initialLines.map((x) => ({
-        symbol: x.symbol ?? "",
-        memo_text: x.memo_text ?? "",
+    ? initialLines.map((item) => ({
+        symbol: item.symbol ?? "",
+        memo_text: item.memo_text ?? "",
       }))
     : [{ symbol: "", memo_text: "" }];
+}
+
+function translateError(message: string) {
+  if (message.includes("did not return JSON")) {
+    return "메모 저장 응답이 올바르지 않습니다. 잠시 후 다시 시도해 주세요.";
+  }
+  if (message.includes("Failed to save notes")) {
+    return "메모 저장에 실패했습니다.";
+  }
+  return message;
 }
 
 export function ParticipantNotesEditor({
@@ -55,7 +65,7 @@ export function ParticipantNotesEditor({
   function removeRow(index: number) {
     setRows((prev) => {
       if (prev.length === 1) return [{ symbol: "", memo_text: "" }];
-      return prev.filter((_, i) => i !== index);
+      return prev.filter((_, rowIndex) => rowIndex !== index);
     });
   }
 
@@ -66,9 +76,9 @@ export function ParticipantNotesEditor({
     try {
       const payload = {
         market_note: marketNote,
-        lines: rows.map((x) => ({
-          symbol: x.symbol.trim() || null,
-          memo_text: x.memo_text,
+        lines: rows.map((row) => ({
+          symbol: row.symbol.trim() || null,
+          memo_text: row.memo_text,
         })),
       };
       const res = await fetch(`/api/participants/${participantId}/notes`, {
@@ -81,19 +91,16 @@ export function ParticipantNotesEditor({
       try {
         json = JSON.parse(raw) as { ok?: boolean; error?: string };
       } catch {
-        const isHtml = raw.trimStart().startsWith("<!DOCTYPE") || raw.trimStart().startsWith("<html");
-        const hint = isHtml
-          ? "Notes API route did not return JSON (likely 404/500 HTML page). Restart dev server and verify /api/participants/[participantId]/notes."
-          : raw.slice(0, 180);
-        throw new Error(`Notes save failed (${res.status}). ${hint}`);
+        throw new Error("Notes API did not return JSON");
       }
       if (!res.ok || !json.ok) {
         throw new Error(json.error ?? "Failed to save notes");
       }
-      setMessage("Notes saved.");
+      setMessage("메모를 저장했습니다.");
       router.refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Unknown error");
+      const message = err instanceof Error ? err.message : "메모 저장에 실패했습니다.";
+      setError(translateError(message));
     } finally {
       setIsSaving(false);
     }
@@ -101,28 +108,28 @@ export function ParticipantNotesEditor({
 
   return (
     <section className="panel p-4">
-      <div className="mb-3 text-base font-semibold text-slate-900">Notes</div>
+      <div className="mb-3 text-base font-semibold text-slate-900">투자 메모</div>
       <div className="grid grid-cols-1 gap-4">
         <label className="text-sm">
-          <div className="mb-1 text-slate-600">Market View</div>
+          <div className="mb-1 text-slate-600">시장 메모</div>
           <textarea
             value={marketNote}
             onChange={(e) => setMarketNote(e.target.value)}
             rows={4}
-            placeholder="Write market outlook and macro notes..."
+            placeholder="오늘 시장에서 중요하게 본 내용이나 아이디어를 적어보세요."
             className="w-full rounded-lg border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
           />
         </label>
 
         <div>
-          <div className="mb-2 text-sm text-slate-600">Asset-level Notes</div>
+          <div className="mb-2 text-sm text-slate-600">종목별 메모</div>
           <div className="overflow-auto rounded-lg border border-slate-200">
             <table className="min-w-full text-sm">
               <thead className="bg-slate-50 text-slate-600">
                 <tr>
-                  <th className="w-36 px-3 py-2 text-left font-semibold">Symbol</th>
-                  <th className="px-3 py-2 text-left font-semibold">Memo</th>
-                  <th className="w-20 px-3 py-2 text-left font-semibold">Action</th>
+                  <th className="w-36 px-3 py-2 text-left font-semibold">종목코드</th>
+                  <th className="px-3 py-2 text-left font-semibold">메모</th>
+                  <th className="w-20 px-3 py-2 text-left font-semibold">삭제</th>
                 </tr>
               </thead>
               <tbody>
@@ -141,7 +148,7 @@ export function ParticipantNotesEditor({
                         value={row.memo_text}
                         onChange={(e) => updateRow(idx, "memo_text", e.target.value)}
                         rows={2}
-                        placeholder="Why this position, key risk, target thesis..."
+                        placeholder="왜 샀는지, 핵심 리스크가 뭔지 짧게 적어보세요."
                         className="w-full rounded-md border border-slate-300 px-2 py-1 outline-none focus:border-slate-500"
                       />
                     </td>
@@ -151,7 +158,7 @@ export function ParticipantNotesEditor({
                         onClick={() => removeRow(idx)}
                         className="rounded-md border border-slate-300 px-2 py-1 text-xs hover:bg-slate-50"
                       >
-                        Remove
+                        삭제
                       </button>
                     </td>
                   </tr>
@@ -166,7 +173,7 @@ export function ParticipantNotesEditor({
               onClick={addRow}
               className="rounded-md border border-slate-300 px-3 py-1.5 text-sm hover:bg-slate-50"
             >
-              + Add Row
+              + 행 추가
             </button>
           </div>
         </div>
@@ -178,7 +185,7 @@ export function ParticipantNotesEditor({
             disabled={isSaving}
             className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-60"
           >
-            {isSaving ? "Saving..." : "Save Notes"}
+            {isSaving ? "저장 중..." : "메모 저장"}
           </button>
           {message && <p className="text-sm text-emerald-700">{message}</p>}
           {error && <p className="text-sm text-rose-700">{error}</p>}

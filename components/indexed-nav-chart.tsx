@@ -21,7 +21,7 @@ type Point = {
 export function IndexedNavChart({ data }: { data: Point[] }) {
   return (
     <div className="panel p-4">
-      <h3 className="text-base font-semibold text-slate-900">Indexed NAV vs SPY vs KOSPI</h3>
+      <h3 className="text-base font-semibold text-slate-900">포트폴리오 vs SPY vs KOSPI</h3>
       <div className="mt-4 h-72 w-full">
         <ResponsiveContainer width="100%" height="100%">
           <LineChart data={data}>
@@ -30,14 +30,7 @@ export function IndexedNavChart({ data }: { data: Point[] }) {
             <YAxis domain={["auto", "auto"]} />
             <Tooltip />
             <Legend />
-            <Line
-              type="monotone"
-              dataKey="nav_indexed"
-              name="Portfolio"
-              stroke="#0f172a"
-              strokeWidth={2.5}
-              dot={false}
-            />
+            <Line type="monotone" dataKey="nav_indexed" name="내 포트폴리오" stroke="#0f172a" strokeWidth={2.5} dot={false} />
             <Line type="monotone" dataKey="spy_indexed" name="SPY" stroke="#0ea5a4" dot={false} />
             <Line type="monotone" dataKey="kospi_indexed" name="KOSPI" stroke="#2563eb" dot={false} />
           </LineChart>

@@ -4,9 +4,9 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 const items = [
-  { href: "/study-tracker", label: "Actionable Calls" },
-  { href: "/study-tracker/sessions", label: "Sessions" },
-  { href: "/study-tracker/portfolio", label: "Included Portfolio" },
+  { href: "/study-tracker", label: "스터디 정리" },
+  { href: "/study-tracker/sessions", label: "자유 종목" },
+  { href: "/study-tracker/portfolio", label: "편입 포트폴리오" },
 ];
 
 export function StudyTrackerNav() {

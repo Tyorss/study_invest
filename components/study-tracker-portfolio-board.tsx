@@ -60,7 +60,7 @@ function describeCurrentPriceSource(idea: StudyTrackerIdea) {
   if (idea.current_price === null) {
     return "저장된 현재가가 없습니다. '현재가 새로고침'으로 실제 시세를 다시 조회할 수 있습니다.";
   }
-  return "현재가는 저장된 시장 데이터입니다. 저장 또는 '현재가 새로고침' 시 provider에서 다시 조회합니다.";
+  return "현재가는 저장된 시장 데이터입니다. 저장 또는 '현재가 새로고침' 시 시세 제공사에서 다시 조회합니다.";
 }
 
 function describeTrackingFormula(idea: StudyTrackerIdea) {
@@ -69,7 +69,7 @@ function describeTrackingFormula(idea: StudyTrackerIdea) {
       idea.tracking_return_pct,
     )}`;
   }
-  return "Tracking Return은 항상 현재가 기준(current / pitch - 1)으로 계산합니다.";
+  return "추적 수익률은 항상 현재가 기준(current / pitch - 1)으로 계산합니다.";
 }
 
 function compareNullableString(a: string | null | undefined, b: string | null | undefined) {
@@ -348,15 +348,15 @@ export function StudyTrackerPortfolioBoard({ data }: { data: StudyTrackerPortfol
       });
       const json = await readApiResponse(res);
       if (!res.ok || !json.ok || !json.idea) {
-        throw new Error(json.error ?? `Failed to refresh market data (HTTP ${res.status})`);
+        throw new Error(json.error ?? `현재가를 새로고치지 못했습니다. (HTTP ${res.status})`);
       }
 
       setIdeas((prev) => prev.map((idea) => (idea.id === json.idea!.id ? json.idea! : idea)));
       setSelectedIdeaId(json.idea.id);
-      setMessage(json.warning ? `Live price refreshed. ${json.warning}` : "Live price refreshed.");
+      setMessage(json.warning ? `현재가를 새로고쳤습니다. ${json.warning}` : "현재가를 새로고쳤습니다.");
       router.refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to refresh live price");
+      setError(err instanceof Error ? err.message : "현재가를 새로고치지 못했습니다.");
     } finally {
       setIsSaving(false);
     }
@@ -387,24 +387,24 @@ export function StudyTrackerPortfolioBoard({ data }: { data: StudyTrackerPortfol
       });
       const json = await readApiResponse(res);
       if (!res.ok || !json.ok) {
-        throw new Error(json.error ?? `Failed to remove from portfolio (HTTP ${res.status})`);
+        throw new Error(json.error ?? `포트폴리오에서 제외하지 못했습니다. (HTTP ${res.status})`);
       }
 
       setIdeas((prev) => prev.filter((idea) => idea.id !== selectedIdea.id));
       setSelectedIdeaId(null);
-      setMessage("Removed from portfolio.");
+      setMessage("포트폴리오에서 제외했습니다.");
       router.refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to remove from portfolio");
+      setError(err instanceof Error ? err.message : "포트폴리오에서 제외하지 못했습니다.");
     } finally {
       setIsSaving(false);
     }
   }
 
   const cards = [
-    { title: "Included", value: String(summary.includedIdeas), tone: "text-slate-900" },
+    { title: "편입 종목 수", value: String(summary.includedIdeas), tone: "text-slate-900" },
     {
-      title: "Portfolio Return",
+      title: "포트폴리오 수익률",
       value: formatPct(summary.portfolioReturnPct),
       tone: toneClass(summary.portfolioReturnPct),
     },
@@ -414,18 +414,18 @@ export function StudyTrackerPortfolioBoard({ data }: { data: StudyTrackerPortfol
       tone: toneClass(data.benchmarkReturnPct),
     },
     {
-      title: "Excess vs Benchmark",
+      title: "벤치마크 대비 초과 수익",
       value: formatPct(data.excessReturnPct),
       tone: toneClass(data.excessReturnPct),
     },
     {
-      title: "Avg Position Return",
+      title: "평균 종목 수익률",
       value: formatPct(summary.avgPositionReturnPct),
       tone: toneClass(summary.avgPositionReturnPct),
     },
     {
-      title: "Best Contributor",
-      value: summary.bestContributor ? summary.bestContributor.ticker : "-",
+      title: "최고 기여 종목",
+      value: summary.bestContributor ? summary.bestContributor.company_name : "-",
       tone: toneClass(summary.bestContributor?.portfolio_return_pct ?? null),
     },
   ];
@@ -435,7 +435,7 @@ export function StudyTrackerPortfolioBoard({ data }: { data: StudyTrackerPortfol
       <section className="panel p-4">
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
           <label className="text-sm">
-            <div className="mb-1 text-slate-600">From</div>
+            <div className="mb-1 text-slate-600">시작일</div>
             <input
               type="date"
               value={periodFrom}
@@ -444,7 +444,7 @@ export function StudyTrackerPortfolioBoard({ data }: { data: StudyTrackerPortfol
             />
           </label>
           <label className="text-sm">
-            <div className="mb-1 text-slate-600">To</div>
+            <div className="mb-1 text-slate-600">종료일</div>
             <input
               type="date"
               value={periodTo}
@@ -453,13 +453,13 @@ export function StudyTrackerPortfolioBoard({ data }: { data: StudyTrackerPortfol
             />
           </label>
           <label className="text-sm">
-            <div className="mb-1 text-slate-600">Benchmark</div>
+            <div className="mb-1 text-slate-600">벤치마크</div>
             <select
               value={benchmark}
               onChange={(e) => setBenchmark(e.target.value as StudyTrackerBenchmarkCode)}
               className="w-full rounded-lg border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
             >
-              <option value="NASDAQ">Nasdaq (QQQ)</option>
+              <option value="NASDAQ">나스닥 (QQQ)</option>
               <option value="SPY">SPY</option>
               <option value="KOSPI">KOSPI</option>
             </select>
@@ -470,7 +470,7 @@ export function StudyTrackerPortfolioBoard({ data }: { data: StudyTrackerPortfol
               onClick={applyPeriodFilters}
               className="w-full rounded-lg bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800"
             >
-              Apply Period
+              기간 적용
             </button>
           </div>
         </div>
@@ -498,22 +498,22 @@ export function StudyTrackerPortfolioBoard({ data }: { data: StudyTrackerPortfol
       <section className="panel p-4">
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
           <label className="text-sm xl:col-span-2">
-            <div className="mb-1 text-slate-600">Search</div>
+            <div className="mb-1 text-slate-600">검색</div>
             <input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Presenter, ticker, company..."
+              placeholder="발표자, 티커, 종목명 검색"
               className="w-full rounded-lg border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
             />
           </label>
           <label className="text-sm">
-            <div className="mb-1 text-slate-600">Presenter</div>
+            <div className="mb-1 text-slate-600">발표자</div>
             <select
               value={presenterFilter}
               onChange={(e) => setPresenterFilter(e.target.value)}
               className="w-full rounded-lg border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
             >
-              <option value="ALL">All</option>
+              <option value="ALL">전체</option>
               {data.presenters.map((presenter) => (
                 <option key={presenter} value={presenter}>
                   {presenter}
@@ -522,15 +522,15 @@ export function StudyTrackerPortfolioBoard({ data }: { data: StudyTrackerPortfol
             </select>
           </label>
           <label className="text-sm">
-            <div className="mb-1 text-slate-600">Position Status</div>
+            <div className="mb-1 text-slate-600">포지션 상태</div>
             <select
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value as "ALL" | "active" | "closed")}
               className="w-full rounded-lg border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
             >
-              <option value="ALL">All</option>
-              <option value="active">active</option>
-              <option value="closed">closed</option>
+              <option value="ALL">전체</option>
+              <option value="active">보유중</option>
+              <option value="closed">종료</option>
             </select>
           </label>
         </div>
@@ -564,12 +564,12 @@ export function StudyTrackerPortfolioBoard({ data }: { data: StudyTrackerPortfol
                     onClick={() => toggleSort("portfolio_return_pct")}
                     className="font-medium hover:text-slate-900"
                   >
-                    Portfolio Return {sortKey === "portfolio_return_pct" ? (sortDirection === "asc" ? "↑" : "↓") : ""}
+                    포트폴리오 수익률 {sortKey === "portfolio_return_pct" ? (sortDirection === "asc" ? "↑" : "↓") : ""}
                   </button>
                 </th>
                 <th className="px-3 py-3 text-right">
                   <button type="button" onClick={() => toggleSort("weight")} className="font-medium hover:text-slate-900">
-                    Weight {sortKey === "weight" ? (sortDirection === "asc" ? "↑" : "↓") : ""}
+                    비중 {sortKey === "weight" ? (sortDirection === "asc" ? "↑" : "↓") : ""}
                   </button>
                 </th>
                 <th className="px-3 py-3">
@@ -609,7 +609,7 @@ export function StudyTrackerPortfolioBoard({ data }: { data: StudyTrackerPortfol
                       {formatPct(idea.portfolio_return_pct)}
                     </td>
                     <td className="px-3 py-3 text-right text-slate-700">
-                      {idea.weight !== null ? idea.weight.toString() : "Equal"}
+                      {idea.weight !== null ? idea.weight.toString() : "동일가중"}
                     </td>
                     <td className="px-3 py-3">
                       <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs text-slate-700">
@@ -622,7 +622,7 @@ export function StudyTrackerPortfolioBoard({ data }: { data: StudyTrackerPortfol
               {sortedIdeas.length === 0 && (
                 <tr>
                   <td colSpan={8} className="px-3 py-10 text-center text-sm text-slate-500">
-                    No included positions matched the current filters.
+                    현재 조건에 맞는 편입 종목이 없습니다.
                   </td>
                 </tr>
               )}
@@ -639,7 +639,7 @@ export function StudyTrackerPortfolioBoard({ data }: { data: StudyTrackerPortfol
           >
             <div className="flex items-start justify-between gap-4">
               <div>
-                <div className="text-xs uppercase tracking-[0.18em] text-slate-500">Portfolio Detail</div>
+                <div className="text-xs uppercase tracking-[0.18em] text-slate-500">포트폴리오 상세</div>
                 <h3 className="mt-2 text-2xl font-semibold text-slate-900">{selectedIdea.company_name}</h3>
                 <div className="mt-1 text-sm text-slate-500">{selectedIdea.ticker}</div>
               </div>
@@ -657,30 +657,30 @@ export function StudyTrackerPortfolioBoard({ data }: { data: StudyTrackerPortfol
                   onClick={() => setSelectedIdeaId(null)}
                   className="rounded-lg border border-slate-300 px-3 py-2 text-sm hover:bg-slate-50"
                 >
-                  Close
+                  닫기
                 </button>
               </div>
             </div>
 
             <div className="mt-5 grid grid-cols-2 gap-3 md:grid-cols-4">
               <div className="rounded-xl border border-slate-200 p-3 text-sm">
-                <div className="text-slate-500">Presenter</div>
+                <div className="text-slate-500">발표자</div>
                 <div className="mt-1 font-medium text-slate-900">{selectedIdea.presenter}</div>
               </div>
               <div className="rounded-xl border border-slate-200 p-3 text-sm">
-                <div className="text-slate-500">Tracking Return</div>
+                <div className="text-slate-500">추적 수익률</div>
                 <div className={`mt-1 font-medium ${toneClass(selectedIdea.tracking_return_pct)}`}>
                   {formatPct(selectedIdea.tracking_return_pct)}
                 </div>
               </div>
               <div className="rounded-xl border border-slate-200 p-3 text-sm">
-                <div className="text-slate-500">Portfolio Return</div>
+                <div className="text-slate-500">포트폴리오 수익률</div>
                 <div className={`mt-1 font-medium ${toneClass(selectedIdea.portfolio_return_pct)}`}>
                   {formatPct(selectedIdea.portfolio_return_pct)}
                 </div>
               </div>
               <div className="rounded-xl border border-slate-200 p-3 text-sm">
-                <div className="text-slate-500">Current Price</div>
+                <div className="text-slate-500">현재가</div>
                 <div className="mt-1 font-medium text-slate-900">
                   {formatPrice(selectedIdea.current_price, selectedIdea.currency)}
                 </div>
@@ -689,20 +689,20 @@ export function StudyTrackerPortfolioBoard({ data }: { data: StudyTrackerPortfol
 
             <section className="mt-5 grid grid-cols-1 gap-3 md:grid-cols-2">
               <div className="rounded-xl border border-slate-200 p-3 text-sm">
-                <div className="text-slate-500">Current Source</div>
+                <div className="text-slate-500">현재가 출처</div>
                 <div className="mt-1 text-slate-900">{describeCurrentPriceSource(selectedIdea)}</div>
               </div>
               <div className="rounded-xl border border-slate-200 p-3 text-sm">
-                <div className="text-slate-500">Tracking Formula</div>
+                <div className="text-slate-500">추적 수익률 계산식</div>
                 <div className="mt-1 text-slate-900">{describeTrackingFormula(selectedIdea)}</div>
               </div>
             </section>
 
             <section className="mt-5 rounded-2xl border border-slate-200 p-4">
-              <div className="text-sm font-semibold text-slate-900">Portfolio Edit</div>
+              <div className="text-sm font-semibold text-slate-900">포트폴리오 편집</div>
               <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
                 <label className="text-sm">
-                  <div className="mb-1 text-slate-600">Included At</div>
+                  <div className="mb-1 text-slate-600">편입일</div>
                   <input
                     type="date"
                     value={draft.included_at}
@@ -711,7 +711,7 @@ export function StudyTrackerPortfolioBoard({ data }: { data: StudyTrackerPortfol
                   />
                 </label>
                 <label className="text-sm">
-                  <div className="mb-1 text-slate-600">Included Price</div>
+                  <div className="mb-1 text-slate-600">편입가</div>
                   <input
                     type="number"
                     value={draft.included_price}
@@ -720,7 +720,7 @@ export function StudyTrackerPortfolioBoard({ data }: { data: StudyTrackerPortfol
                   />
                 </label>
                 <label className="text-sm">
-                  <div className="mb-1 text-slate-600">Weight</div>
+                  <div className="mb-1 text-slate-600">비중</div>
                   <input
                     type="number"
                     step="0.0001"
@@ -731,7 +731,7 @@ export function StudyTrackerPortfolioBoard({ data }: { data: StudyTrackerPortfol
                   />
                 </label>
                 <label className="text-sm">
-                  <div className="mb-1 text-slate-600">Position Status</div>
+                  <div className="mb-1 text-slate-600">포지션 상태</div>
                   <select
                     value={draft.position_status}
                     onChange={(e) =>
@@ -741,13 +741,13 @@ export function StudyTrackerPortfolioBoard({ data }: { data: StudyTrackerPortfol
                     }
                     className="w-full rounded-lg border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
                   >
-                    <option value="active">active</option>
-                    <option value="closed">closed</option>
+                    <option value="active">보유중</option>
+                    <option value="closed">종료</option>
                   </select>
                 </label>
                 {draft.position_status === "closed" && (
                   <label className="text-sm">
-                    <div className="mb-1 text-slate-600">Exited At</div>
+                    <div className="mb-1 text-slate-600">청산일</div>
                     <input
                       type="date"
                       value={draft.exited_at}
@@ -758,7 +758,7 @@ export function StudyTrackerPortfolioBoard({ data }: { data: StudyTrackerPortfol
                 )}
                 {draft.position_status === "closed" && (
                   <label className="text-sm">
-                    <div className="mb-1 text-slate-600">Exited Price</div>
+                    <div className="mb-1 text-slate-600">청산가</div>
                     <input
                       type="number"
                       value={draft.exited_price}
@@ -775,7 +775,7 @@ export function StudyTrackerPortfolioBoard({ data }: { data: StudyTrackerPortfol
                   disabled={isSaving}
                   className="rounded-lg bg-slate-900 px-3 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:bg-slate-400"
                 >
-                  {isSaving ? "Saving..." : "Save Position"}
+                  {isSaving ? "저장 중..." : "포지션 저장"}
                 </button>
                 <button
                   type="button"
@@ -783,7 +783,7 @@ export function StudyTrackerPortfolioBoard({ data }: { data: StudyTrackerPortfol
                   disabled={isSaving}
                   className="rounded-lg border border-rose-200 px-3 py-2 text-sm text-rose-700 hover:bg-rose-50 disabled:opacity-50"
                 >
-                  Remove from Portfolio
+                  포트폴리오에서 제외
                 </button>
               </div>
             </section>

@@ -35,9 +35,18 @@ type ManualJobResponse = {
   error?: string;
 };
 
+function translateError(message: string) {
+  if (message.includes("Unauthorized")) return "운영 비밀번호가 맞지 않습니다.";
+  if (message.includes("CRON_SECRET is not configured")) return "서버에 운영 비밀번호가 설정되지 않았습니다.";
+  if (message.includes("Invalid JSON body")) return "요청 형식이 올바르지 않습니다.";
+  if (message.includes("Invalid job type")) return "실행할 작업 종류가 올바르지 않습니다.";
+  if (message.includes("date must be YYYY-MM-DD")) return "날짜 형식은 YYYY-MM-DD여야 합니다.";
+  return message;
+}
+
 function buildSummary(job: JobName, targetDate: string, result: JobResult | undefined) {
   if (!result) {
-    return `${job} finished for ${targetDate}.`;
+    return `${targetDate} 기준 작업이 완료되었습니다.`;
   }
 
   if (job === "run-daily") {
@@ -45,25 +54,21 @@ function buildSummary(job: JobName, targetDate: string, result: JobResult | unde
     const fx = result.fx;
     const snapshots = result.snapshots;
     return [
-      `Run daily finished for ${targetDate}.`,
-      `Prices: ${prices?.status ?? "-"}`,
-      prices?.rows !== undefined ? `rows=${prices.rows}` : null,
-      fx?.status ? `FX: ${fx.status}` : null,
-      snapshots?.status
-        ? `Snapshots: ${snapshots.status}${snapshots.successCount !== undefined ? ` (${snapshots.successCount})` : ""}`
-        : null,
+      `${targetDate} 기준 일일 업데이트를 실행했습니다.`,
+      prices?.rows !== undefined ? `가격 ${prices.rows}건 처리` : null,
+      fx?.status ? `환율 ${fx.status}` : null,
+      snapshots?.successCount !== undefined ? `스냅샷 ${snapshots.successCount}명 반영` : null,
     ]
       .filter(Boolean)
-      .join(" ");
+      .join(" · ");
   }
 
   return [
-    `Snapshots regenerated for ${targetDate}.`,
-    result.status ? `status=${result.status}` : null,
-    result.successCount !== undefined ? `successCount=${result.successCount}` : null,
+    `${targetDate} 기준 스냅샷을 다시 만들었습니다.`,
+    result.successCount !== undefined ? `${result.successCount}명 반영` : null,
   ]
     .filter(Boolean)
-    .join(" ");
+    .join(" · ");
 }
 
 export function ManualJobsPanel({
@@ -99,13 +104,14 @@ export function ManualJobsPanel({
       });
       const json = (await res.json()) as ManualJobResponse;
       if (!res.ok || !json.ok) {
-        throw new Error(json.error ?? `Failed to run ${job} (HTTP ${res.status})`);
+        throw new Error(json.error ?? `HTTP ${res.status}`);
       }
 
       setMessage(buildSummary(job, json.targetDate ?? date, json.result));
       router.refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to run manual update");
+      const message = err instanceof Error ? err.message : "작업 실행에 실패했습니다.";
+      setError(translateError(message));
     } finally {
       setBusyJob(null);
     }
@@ -115,27 +121,26 @@ export function ManualJobsPanel({
     <section className="panel p-5">
       <div className="flex flex-col gap-4">
         <div>
-          <h2 className="text-base font-semibold text-slate-900">Manual Update</h2>
+          <h2 className="text-base font-semibold text-slate-900">운영자용 업데이트 도구</h2>
           <p className="mt-1 text-sm text-slate-600">
-            Use this when we want to rerun the pipeline immediately after manual trades or a failed
-            daily job. The secret is checked server-side and never read back into the page.
+            일반 사용자용 화면이 아니라 운영자가 가격, 환율, 스냅샷을 수동으로 다시 돌릴 때 사용하는 메뉴입니다.
           </p>
         </div>
 
         <label className="text-sm">
-          <div className="mb-1 text-slate-600">CRON Secret</div>
+          <div className="mb-1 text-slate-600">운영 비밀번호</div>
           <input
             type="password"
             value={secret}
             onChange={(e) => setSecret(e.target.value)}
-            placeholder="Enter CRON secret"
+            placeholder="운영 비밀번호 입력"
             className="w-full rounded-lg border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
           />
         </label>
 
         <div className="grid grid-cols-1 gap-3 xl:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)_auto]">
           <label className="text-sm">
-            <div className="mb-1 text-slate-600">Run Daily Date</div>
+            <div className="mb-1 text-slate-600">일일 업데이트 기준일</div>
             <input
               type="date"
               value={dailyDate}
@@ -149,11 +154,11 @@ export function ManualJobsPanel({
             onClick={() => runJob("run-daily", dailyDate)}
             className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-60 xl:self-end"
           >
-            {busyJob === "run-daily" ? "Running..." : "Run Daily"}
+            {busyJob === "run-daily" ? "실행 중..." : "일일 업데이트 실행"}
           </button>
 
           <label className="text-sm">
-            <div className="mb-1 text-slate-600">Snapshot Date</div>
+            <div className="mb-1 text-slate-600">스냅샷 기준일</div>
             <input
               type="date"
               value={snapshotDate}
@@ -167,13 +172,13 @@ export function ManualJobsPanel({
             onClick={() => runJob("generate-snapshots", snapshotDate)}
             className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-900 hover:bg-slate-50 disabled:opacity-60 xl:self-end"
           >
-            {busyJob === "generate-snapshots" ? "Running..." : "Generate Snapshots"}
+            {busyJob === "generate-snapshots" ? "실행 중..." : "스냅샷 다시 만들기"}
           </button>
         </div>
 
         <div className="text-xs text-slate-500">
-          `Run Daily` updates prices, FX, and snapshots. `Generate Snapshots` is the fast rerun for
-          leaderboard/detail refresh after trade edits.
+          일일 업데이트 실행은 가격, 환율, 스냅샷을 모두 갱신합니다. 스냅샷 다시 만들기는 거래 수정 후
+          리더보드와 상세 화면을 빠르게 다시 맞출 때 사용합니다.
         </div>
 
         {(message || error) && (

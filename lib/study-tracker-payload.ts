@@ -56,7 +56,7 @@ export function withStudyTrackerHint(message: string) {
       lower.includes("schema cache") ||
       lower.includes("could not find table"));
   if (missingTable) {
-    return `${message} (Run migrations/0004_study_tracker.sql in Supabase SQL editor.)`;
+    return "스터디 트래커 기본 테이블이 아직 생성되지 않았습니다. Supabase SQL Editor에서 migrations/0004_study_tracker.sql을 먼저 실행해 주세요.";
   }
 
   const missingPortfolioColumns =
@@ -69,7 +69,7 @@ export function withStudyTrackerHint(message: string) {
       lower.includes("exited_price") ||
       lower.includes("weight"));
   if (missingPortfolioColumns) {
-    return `${message} (Run migrations/0005_study_tracker_portfolio.sql in Supabase SQL editor.)`;
+    return "편입 포트폴리오용 컬럼이 아직 생성되지 않았습니다. Supabase SQL Editor에서 migrations/0005_study_tracker_portfolio.sql을 실행해 주세요.";
   }
 
   const missingSessionTables =
@@ -86,7 +86,7 @@ export function withStudyTrackerHint(message: string) {
       lower.includes("schema cache") ||
       lower.includes("could not find"));
   if (missingSessionTables) {
-    return `${message} (Run migrations/0006_study_sessions_and_call_links.sql in Supabase SQL editor.)`;
+    return "산업 발표/피드백/연결 거래용 테이블이 아직 생성되지 않았습니다. Supabase SQL Editor에서 migrations/0006_study_sessions_and_call_links.sql을 실행해 주세요.";
   }
 
   return message;

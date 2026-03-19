@@ -17,7 +17,12 @@ import {
 } from "@/lib/db";
 import { createValueCache, rebuildPortfolioState } from "@/lib/engine/snapshot";
 import { addDays } from "@/lib/time";
-import type { LeaderboardInstrumentsRow, LeaderboardRow, RankedInstrumentStat } from "@/types/db";
+import type {
+  LeaderboardInstrumentsRow,
+  LeaderboardRow,
+  MissingPriceHoldingRow,
+  RankedInstrumentStat,
+} from "@/types/db";
 
 function toNumOrNull(value: unknown): number | null {
   if (value === null || value === undefined) return null;
@@ -31,13 +36,20 @@ function isWeekend(date: string): boolean {
 }
 
 function top3Stats(
-  items: Array<{ symbol: string; value: number | null }>,
+  items: Array<{ symbol: string; label?: string; value: number | null }>,
 ): RankedInstrumentStat[] {
   return items
-    .filter((x): x is { symbol: string; value: number } => x.value !== null)
+    .filter((x): x is { symbol: string; label?: string; value: number } => x.value !== null)
     .sort((a, b) => b.value - a.value)
     .slice(0, 3)
-    .map((x) => ({ symbol: x.symbol, value: x.value }));
+    .map((x) => ({ symbol: x.symbol, label: x.label, value: x.value }));
+}
+
+function resolveUsableMarkPrice(price: number | null, fallback: number) {
+  if (!Number.isFinite(price ?? NaN) || (price ?? 0) <= 0) {
+    return { value: fallback, isFallback: true };
+  }
+  return { value: price as number, isFallback: false };
 }
 
 async function computeTurnover20d(params: {
@@ -240,13 +252,16 @@ export async function fetchLeaderboard(sortBy: "return" | "sharpe" = "return") {
         );
       }
 
-      const returnItems: Array<{ symbol: string; value: number | null }> = [];
-      const weightItems: Array<{ symbol: string; value: number | null }> = [];
-      const unrealizedItems: Array<{ symbol: string; value: number | null }> = [];
+      const returnItems: Array<{ symbol: string; label: string; value: number | null }> = [];
+      const weightItems: Array<{ symbol: string; label: string; value: number | null }> = [];
+      const unrealizedItems: Array<{ symbol: string; label: string; value: number | null }> = [];
 
       for (const p of state?.positions ?? []) {
-        const close =
-          (await cache.priceOnOrBefore(p.instrument.id, stateDate)) ?? p.avg_cost_local;
+        const resolvedMark = resolveUsableMarkPrice(
+          await cache.priceOnOrBefore(p.instrument.id, stateDate),
+          p.avg_cost_local,
+        );
+        const close = resolvedMark.value;
         const isUsd = p.instrument.currency === "USD";
         const fx = isUsd ? await cache.fxOnOrBefore(stateDate) : 1;
         if (isUsd && !fx) continue;
@@ -257,9 +272,10 @@ export async function fetchLeaderboard(sortBy: "return" | "sharpe" = "return") {
         const weight = navKrw > 0 ? valueKrw / navKrw : null;
         const unrealized = valueKrw - costKrw;
 
-        returnItems.push({ symbol: p.instrument.symbol, value: ret });
-        weightItems.push({ symbol: p.instrument.symbol, value: weight });
-        unrealizedItems.push({ symbol: p.instrument.symbol, value: unrealized });
+        const label = p.instrument.name || p.instrument.symbol;
+        returnItems.push({ symbol: p.instrument.symbol, label, value: ret });
+        weightItems.push({ symbol: p.instrument.symbol, label, value: weight });
+        unrealizedItems.push({ symbol: p.instrument.symbol, label, value: unrealized });
       }
 
       topReturn = top3Stats(returnItems);
@@ -429,9 +445,11 @@ export async function fetchParticipantDetail(participantId: string) {
   if (resolvedValuationDate && liveState) {
     holdings = [];
     for (const p of liveState.positions) {
-      const close =
-        (await valuationCache.priceOnOrBefore(p.instrument.id, resolvedValuationDate)) ??
-        p.avg_cost_local;
+      const resolvedMark = resolveUsableMarkPrice(
+        await valuationCache.priceOnOrBefore(p.instrument.id, resolvedValuationDate),
+        p.avg_cost_local,
+      );
+      const close = resolvedMark.value;
       const fx =
         p.instrument.currency === "USD"
           ? await valuationCache.fxOnOrBefore(resolvedValuationDate)
@@ -447,6 +465,7 @@ export async function fetchParticipantDetail(participantId: string) {
         quantity: p.quantity,
         avg_cost_local: p.avg_cost_local,
         mark_local: close,
+        price_unavailable: resolvedMark.isFallback,
         value_krw: valueKrw,
         unrealized_pnl_krw: pnlKrw,
       });
@@ -606,4 +625,91 @@ export async function fetchParticipantDetail(participantId: string) {
     })),
     chartSeries,
   };
+}
+
+export async function fetchMissingPriceHoldings(): Promise<MissingPriceHoldingRow[]> {
+  const participantRows = await getParticipantsWithPortfolios();
+  if (participantRows.length === 0) return [];
+
+  const cache = createValueCache();
+  const missingRows = await Promise.all(
+    participantRows.map(async ({ participant, portfolio }) => {
+      const [latestSnapshot, latestTradeDate] = await Promise.all([
+        getParticipantLatestSnapshot(participant.id),
+        getLatestTradeDateForPortfolio(portfolio.id),
+      ]);
+
+      const snapshotDate = latestSnapshot ? String(latestSnapshot.date) : null;
+      const valuationDate =
+        [snapshotDate, latestTradeDate]
+          .filter((value): value is string => Boolean(value))
+          .sort((a, b) => a.localeCompare(b))
+          .at(-1) ?? null;
+
+      if (!valuationDate) return [] as MissingPriceHoldingRow[];
+
+      let liveState: Awaited<ReturnType<typeof rebuildPortfolioState>> | null = null;
+      let resolvedValuationDate = valuationDate;
+
+      try {
+        liveState = await rebuildPortfolioState(portfolio, participant, valuationDate, cache);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "Unknown valuation error";
+        console.error(
+          `[missing-prices] live valuation failed for ${participant.id} (${valuationDate}): ${msg}`,
+        );
+
+        if (snapshotDate && snapshotDate !== valuationDate) {
+          try {
+            liveState = await rebuildPortfolioState(portfolio, participant, snapshotDate, cache);
+            resolvedValuationDate = snapshotDate;
+          } catch (fallbackErr) {
+            const fallbackMsg =
+              fallbackErr instanceof Error
+                ? fallbackErr.message
+                : "Unknown fallback valuation error";
+            console.error(
+              `[missing-prices] fallback valuation failed for ${participant.id} (${snapshotDate}): ${fallbackMsg}`,
+            );
+            liveState = null;
+          }
+        }
+      }
+
+      if (!liveState) return [] as MissingPriceHoldingRow[];
+
+      const rows: MissingPriceHoldingRow[] = [];
+      for (const position of liveState.positions) {
+        const resolvedMark = resolveUsableMarkPrice(
+          await cache.priceOnOrBefore(position.instrument.id, resolvedValuationDate),
+          position.avg_cost_local,
+        );
+
+        if (!resolvedMark.isFallback) continue;
+
+        rows.push({
+          participant_id: participant.id,
+          participant_name: participant.name,
+          color_tag: participant.color_tag,
+          valuation_date: resolvedValuationDate,
+          symbol: position.instrument.symbol,
+          name: position.instrument.name,
+          market: position.instrument.market,
+          currency: position.instrument.currency,
+          quantity: position.quantity,
+          avg_cost_local: position.avg_cost_local,
+          fallback_mark_local: resolvedMark.value,
+        });
+      }
+
+      return rows;
+    }),
+  );
+
+  return missingRows
+    .flat()
+    .sort((a, b) =>
+      a.participant_name.localeCompare(b.participant_name, "ko-KR") ||
+      a.symbol.localeCompare(b.symbol, "ko-KR"),
+    );
 }

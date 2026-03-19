@@ -1,8 +1,7 @@
 import Link from "next/link";
 
 export function RankToggle({ active }: { active: "return" | "sharpe" }) {
-  const base =
-    "rounded-xl px-3 py-2 text-sm font-medium transition border";
+  const base = "rounded-xl px-3 py-2 text-sm font-medium transition border";
   const activeCls = "bg-slate-900 text-white border-slate-900";
   const idleCls = "bg-white text-slate-700 border-slate-300 hover:bg-slate-50";
 
@@ -12,13 +11,13 @@ export function RankToggle({ active }: { active: "return" | "sharpe" }) {
         href="/?rank=return"
         className={`${base} ${active === "return" ? activeCls : idleCls}`}
       >
-        Rank by Return
+        수익률 순
       </Link>
       <Link
         href="/?rank=sharpe"
         className={`${base} ${active === "sharpe" ? activeCls : idleCls}`}
       >
-        Rank by Sharpe
+        샤프 순
       </Link>
     </div>
   );

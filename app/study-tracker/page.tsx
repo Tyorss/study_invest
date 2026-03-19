@@ -49,14 +49,14 @@ export default async function StudyTrackerPage({
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <Link href="/" className="text-sm text-slate-500 hover:underline">
-                Back to Leaderboard
+                홈으로 돌아가기
               </Link>
-              <h1 className="mt-2 text-2xl font-semibold tracking-tight">Study Tracker</h1>
+              <h1 className="mt-2 text-2xl font-semibold tracking-tight">스터디 정리</h1>
               <p className="mt-2 text-sm text-slate-600">
-                Actionable call만 비교하는 보드입니다. Tracking Return은 call date 기준 발표가 대비 현재가로 계산됩니다.
+                스터디에서 다룬 종목을 정리하고 추적하는 화면입니다. 추적 수익률은 종목 등록 시점의 발표가와 현재가를 기준으로 계산됩니다.
               </p>
               <p className="mt-1 text-xs text-slate-500">
-                산업 발표와 커버리지 종목은 Sessions 탭에서 따로 관리하고, 이 페이지는 실제 콜 성과만 다룹니다.
+                산업 발표와 커버리지 종목은 산업 발표 탭에서 따로 관리하고, 실제 편입 관리는 편입 포트폴리오에서 따로 확인합니다.
               </p>
             </div>
           </div>
@@ -74,9 +74,9 @@ export default async function StudyTrackerPage({
       <main className="space-y-5">
         <header className="panel p-5">
           <Link href="/" className="text-sm text-slate-500 hover:underline">
-            Back to Leaderboard
+            홈으로 돌아가기
           </Link>
-          <h1 className="mt-2 text-2xl font-semibold tracking-tight">Study Tracker</h1>
+          <h1 className="mt-2 text-2xl font-semibold tracking-tight">스터디 정리</h1>
           <StudyTrackerNav />
         </header>
         <section className="panel p-5">

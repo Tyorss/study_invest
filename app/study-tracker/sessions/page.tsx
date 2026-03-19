@@ -16,12 +16,11 @@ export default async function StudyTrackerSessionsPage() {
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <Link href="/" className="text-sm text-slate-500 hover:underline">
-                Back to Leaderboard
+                홈으로 돌아가기
               </Link>
-              <h1 className="mt-2 text-2xl font-semibold tracking-tight">Study Sessions</h1>
+              <h1 className="mt-2 text-2xl font-semibold tracking-tight">자유 종목</h1>
               <p className="mt-2 text-sm text-slate-600">
-                산업 발표와 커버리지 종목을 보관하는 리서치 레이어입니다. 여기서 언급된 종목은 바로 성과판 평가 대상이 아니고,
-                실제 콜로 전환될 때만 Actionable Calls 보드로 넘어갑니다.
+                스터디와 무관하게 자유롭게 종목 의견을 올리고 정리하는 공간입니다. 관심 종목, 메모, 관점을 편하게 남겨둘 수 있습니다.
               </p>
             </div>
           </div>
@@ -40,9 +39,9 @@ export default async function StudyTrackerSessionsPage() {
       <main className="space-y-5">
         <header className="panel p-5">
           <Link href="/" className="text-sm text-slate-500 hover:underline">
-            Back to Leaderboard
+            홈으로 돌아가기
           </Link>
-          <h1 className="mt-2 text-2xl font-semibold tracking-tight">Study Sessions</h1>
+          <h1 className="mt-2 text-2xl font-semibold tracking-tight">자유 종목</h1>
           <StudyTrackerNav />
         </header>
         <section className="panel p-5">

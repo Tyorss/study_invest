@@ -36,21 +36,21 @@ const DEFAULT_STYLE_OPTIONS = [
   "자산주",
 ];
 const CALL_DIRECTION_OPTIONS: Array<{ value: StudyCallDirection; label: string }> = [
-  { value: "long", label: "Long" },
-  { value: "watch", label: "Watch" },
-  { value: "avoid", label: "Avoid" },
+  { value: "long", label: "매수" },
+  { value: "watch", label: "관찰" },
+  { value: "avoid", label: "회피" },
 ];
 const POSITION_STATUS_OPTIONS = ["active", "closed"] as const;
 const FEEDBACK_STANCE_OPTIONS: Array<{ value: StudyCallFeedbackStance; label: string }> = [
-  { value: "agree", label: "Agree" },
-  { value: "neutral", label: "Neutral" },
-  { value: "disagree", label: "Disagree" },
+  { value: "agree", label: "동의" },
+  { value: "neutral", label: "중립" },
+  { value: "disagree", label: "반대" },
 ];
 const UPDATE_TYPE_OPTIONS: Array<{ value: StudyCallUpdateType; label: string }> = [
-  { value: "update", label: "Update" },
-  { value: "catalyst", label: "Catalyst" },
-  { value: "risk", label: "Risk" },
-  { value: "postmortem", label: "Postmortem" },
+  { value: "update", label: "업데이트" },
+  { value: "catalyst", label: "촉매" },
+  { value: "risk", label: "리스크" },
+  { value: "postmortem", label: "사후 복기" },
 ];
 
 type ComposerPrefill = Partial<StudyTrackerIdeaInput> & {
@@ -363,7 +363,7 @@ function describeTrackingFormula(idea: StudyTrackerIdea) {
       idea.tracking_return_pct,
     )}`;
   }
-  return "Tracking Return은 항상 현재가 기준(current / pitch - 1)으로 계산합니다.";
+  return "추적 수익률은 항상 현재가 기준(current / pitch - 1)으로 계산합니다.";
 }
 
 export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
@@ -690,7 +690,7 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
   }
 
   async function deleteIdea(idea: StudyTrackerIdea) {
-    if (!window.confirm(`Delete ${idea.company_name} (${idea.ticker})?`)) return;
+    if (!window.confirm(`${idea.company_name} (${idea.ticker}) 콜을 삭제할까요?`)) return;
     setBusyId(idea.id);
     setMessage(null);
     setError(null);
@@ -707,7 +707,7 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
       if (selectedIdeaId === idea.id) setSelectedIdeaId(null);
       if (editingId === idea.id) closeComposer();
       setMenuIdeaId(null);
-      setMessage("Call deleted.");
+      setMessage("콜을 삭제했습니다.");
       router.refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to delete call");
@@ -737,7 +737,7 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
         throw new Error(json.error ?? `Failed to save feedback (HTTP ${res.status})`);
       }
       setFeedbackNote("");
-      setMessage("Feedback saved.");
+      setMessage("의견을 저장했습니다.");
       router.refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save feedback");
@@ -771,7 +771,7 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
       setUpdateTitle("");
       setUpdateBody("");
       setUpdateAuthor("");
-      setMessage("Update saved.");
+      setMessage("업데이트를 저장했습니다.");
       router.refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save update");
@@ -781,17 +781,21 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
   }
 
   const cards = [
-    { title: "Total Calls", value: String(summary.totalCalls), tone: "text-slate-900" },
-    { title: "Adopted Calls", value: String(summary.adoptedCalls), tone: "text-slate-900" },
-    { title: "From Sessions", value: String(summary.callsFromSessions), tone: "text-slate-900" },
+    { title: "전체 스터디 종목 수", value: String(summary.totalCalls), tone: "text-slate-900" },
+    { title: "실제 매매 연결 종목", value: String(summary.adoptedCalls), tone: "text-slate-900" },
+    { title: "산업 발표 연계 종목", value: String(summary.callsFromSessions), tone: "text-slate-900" },
     {
-      title: "Most Followed",
-      value: summary.mostFollowed ? `${summary.mostFollowed.ticker} · ${summary.mostFollowed.adoption_count}` : "-",
+      title: "가장 많이 따라간 종목",
+      value: summary.mostFollowed
+        ? `${summary.mostFollowed.company_name} · ${summary.mostFollowed.adoption_count}`
+        : "-",
       tone: "text-slate-900",
     },
     {
-      title: "Most Discussed",
-      value: summary.mostDiscussed ? `${summary.mostDiscussed.ticker} · ${summary.mostDiscussed.feedback_count}` : "-",
+      title: "의견이 가장 많이 달린 종목",
+      value: summary.mostDiscussed
+        ? `${summary.mostDiscussed.company_name} · ${summary.mostDiscussed.feedback_count}`
+        : "-",
       tone: "text-slate-900",
     },
   ];
@@ -806,9 +810,9 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
       <section className="panel p-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h2 className="text-base font-semibold text-slate-900">Actionable Calls Board</h2>
+            <h2 className="text-base font-semibold text-slate-900">스터디 종목</h2>
             <p className="mt-1 text-sm text-slate-600">
-              이 보드는 실제 콜만 비교합니다. 산업 발표에서 언급된 종목은 별도 Sessions 탭에서 관리합니다.
+              이 화면은 스터디에서 다룬 종목을 정리하고 비교하는 곳입니다. 산업 발표에서 언급된 종목은 별도 산업 발표 탭에서 관리합니다.
             </p>
           </div>
           {!composerOpen ? (
@@ -817,7 +821,7 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
               onClick={() => openComposerForCreate(null)}
               className="rounded-lg bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800"
             >
-              새 Actionable Call
+              새 종목 추가
             </button>
           ) : (
             <button
@@ -841,7 +845,7 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
           <div className="mt-4 rounded-2xl border border-slate-200 p-4">
             <div>
               <h3 className="text-sm font-semibold text-slate-900">
-                {editingId === null ? "New Actionable Call" : `Edit Call #${editingId}`}
+                {editingId === null ? "새 콜 등록" : `콜 수정 #${editingId}`}
               </h3>
               <p className="mt-1 text-xs text-slate-500">
                 산업 발표 세션과 연결되더라도, 이 입력은 실제 콜 생성 시점 기준으로 관리합니다.
@@ -850,9 +854,9 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
 
             {(draft.source_session_id || draft.source_coverage_id) && (
               <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
-                <div className="font-medium text-slate-900">Linked Session Context</div>
+                <div className="font-medium text-slate-900">연결된 발표 맥락</div>
                 <div className="mt-1">
-                  {initialComposer?.sourceSessionLabel ?? "Source session linked"}
+                  {initialComposer?.sourceSessionLabel ?? "연결된 발표"}
                   {initialComposer?.sourceCoverageLabel ? ` / ${initialComposer.sourceCoverageLabel}` : ""}
                 </div>
               </div>
@@ -860,7 +864,7 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
 
             <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
               <label className="text-sm">
-                <div className="mb-1 text-slate-600">Call Date</div>
+                <div className="mb-1 text-slate-600">콜 날짜</div>
                 <input
                   type="date"
                   value={draft.presented_at}
@@ -869,7 +873,7 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
                 />
               </label>
               <label className="text-sm">
-                <div className="mb-1 text-slate-600">Presenter</div>
+                <div className="mb-1 text-slate-600">발표자</div>
                 <input
                   list="study-tracker-presenters"
                   value={draft.presenter}
@@ -883,7 +887,7 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
                 </datalist>
               </label>
               <label className="text-sm">
-                <div className="mb-1 text-slate-600">Company</div>
+                <div className="mb-1 text-slate-600">종목명</div>
                 <input
                   value={draft.company_name}
                   onChange={(e) => updateDraft("company_name", e.target.value)}
@@ -891,7 +895,7 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
                 />
               </label>
               <label className="text-sm">
-                <div className="mb-1 text-slate-600">Ticker</div>
+                <div className="mb-1 text-slate-600">티커</div>
                 <input
                   value={draft.ticker}
                   onChange={(e) => updateDraft("ticker", e.target.value)}
@@ -900,7 +904,7 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
                 />
               </label>
               <label className="text-sm">
-                <div className="mb-1 text-slate-600">Direction</div>
+                <div className="mb-1 text-slate-600">방향</div>
                 <select
                   value={draft.call_direction}
                   onChange={(e) => updateDraft("call_direction", e.target.value as StudyCallDirection)}
@@ -914,7 +918,7 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
                 </select>
               </label>
               <label className="text-sm">
-                <div className="mb-1 text-slate-600">Status</div>
+                <div className="mb-1 text-slate-600">상태</div>
                 <select
                   value={draft.status}
                   onChange={(e) => updateDraft("status", e.target.value)}
@@ -928,7 +932,7 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
                 </select>
               </label>
               <label className="text-sm">
-                <div className="mb-1 text-slate-600">Sector</div>
+                <div className="mb-1 text-slate-600">섹터</div>
                 <select
                   value={draft.sector}
                   onChange={(e) => updateDraft("sector", e.target.value)}
@@ -943,7 +947,7 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
                 </select>
               </label>
               <label className="text-sm">
-                <div className="mb-1 text-slate-600">Style</div>
+                <div className="mb-1 text-slate-600">스타일</div>
                 <select
                   value={draft.style}
                   onChange={(e) => updateDraft("style", e.target.value)}
@@ -958,19 +962,19 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
                 </select>
               </label>
               <label className="text-sm">
-                <div className="mb-1 text-slate-600">Currency</div>
+                <div className="mb-1 text-slate-600">통화</div>
                 <select
                   value={draft.currency}
                   onChange={(e) => updateDraft("currency", e.target.value as Draft["currency"])}
                   className="w-full rounded-lg border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
                 >
-                  <option value="">Auto</option>
+                  <option value="">자동</option>
                   <option value="KRW">KRW</option>
                   <option value="USD">USD</option>
                 </select>
               </label>
               <label className="text-sm">
-                <div className="mb-1 text-slate-600">Pitch Price</div>
+                <div className="mb-1 text-slate-600">발표가</div>
                 <input
                   type="number"
                   value={draft.pitch_price}
@@ -979,7 +983,7 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
                 />
               </label>
               <label className="text-sm">
-                <div className="mb-1 text-slate-600">Target Price</div>
+                <div className="mb-1 text-slate-600">목표가</div>
                 <input
                   type="number"
                   value={draft.target_price}
@@ -988,7 +992,7 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
                 />
               </label>
               <label className="text-sm">
-                <div className="mb-1 text-slate-600">Conviction (1-5)</div>
+                <div className="mb-1 text-slate-600">확신도 (1-5)</div>
                 <input
                   type="number"
                   min="1"
@@ -999,7 +1003,7 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
                 />
               </label>
               <label className="text-sm xl:col-span-2">
-                <div className="mb-1 text-slate-600">Time Horizon</div>
+                <div className="mb-1 text-slate-600">투자 기간</div>
                 <input
                   value={draft.time_horizon}
                   onChange={(e) => updateDraft("time_horizon", e.target.value)}
@@ -1011,7 +1015,7 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
 
             <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
               <label className="text-sm">
-                <div className="mb-1 text-slate-600">Thesis</div>
+                <div className="mb-1 text-slate-600">투자 아이디어</div>
                 <textarea
                   rows={4}
                   value={draft.thesis}
@@ -1020,7 +1024,7 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
                 />
               </label>
               <label className="text-sm">
-                <div className="mb-1 text-slate-600">Trigger</div>
+                <div className="mb-1 text-slate-600">핵심 이벤트</div>
                 <textarea
                   rows={4}
                   value={draft.trigger}
@@ -1029,7 +1033,7 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
                 />
               </label>
               <label className="text-sm">
-                <div className="mb-1 text-slate-600">Risk</div>
+                <div className="mb-1 text-slate-600">리스크</div>
                 <textarea
                   rows={4}
                   value={draft.risk}
@@ -1038,7 +1042,7 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
                 />
               </label>
               <label className="text-sm">
-                <div className="mb-1 text-slate-600">Summary / Note</div>
+                <div className="mb-1 text-slate-600">한 줄 요약 / 메모</div>
                 <textarea
                   rows={4}
                   value={draft.note}
@@ -1050,7 +1054,7 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
 
             <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
               <label className="text-sm">
-                <div className="mb-1 text-slate-600">Invalidation Rule</div>
+                <div className="mb-1 text-slate-600">무효화 조건</div>
                 <textarea
                   rows={3}
                   value={draft.invalidation_rule}
@@ -1091,7 +1095,7 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
                 {showPortfolioFields && (
                   <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
                     <label className="text-sm">
-                      <div className="mb-1 text-slate-600">Included At</div>
+                      <div className="mb-1 text-slate-600">편입일</div>
                       <input
                         type="date"
                         value={draft.included_at}
@@ -1100,7 +1104,7 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
                       />
                     </label>
                     <label className="text-sm">
-                      <div className="mb-1 text-slate-600">Included Price</div>
+                      <div className="mb-1 text-slate-600">편입가</div>
                       <input
                         type="number"
                         value={draft.included_price}
@@ -1109,7 +1113,7 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
                       />
                     </label>
                     <label className="text-sm">
-                      <div className="mb-1 text-slate-600">Weight</div>
+                      <div className="mb-1 text-slate-600">비중</div>
                       <input
                         type="number"
                         step="0.0001"
@@ -1120,19 +1124,19 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
                       />
                     </label>
                     <label className="text-sm">
-                      <div className="mb-1 text-slate-600">Position Status</div>
+                      <div className="mb-1 text-slate-600">포지션 상태</div>
                       <select
                         value={draft.position_status}
                         onChange={(e) => updateDraft("position_status", e.target.value as Draft["position_status"])}
                         className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 outline-none focus:border-slate-500"
                       >
-                        <option value="active">active</option>
-                        <option value="closed">closed</option>
+                        <option value="active">보유중</option>
+                        <option value="closed">종료</option>
                       </select>
                     </label>
                     {showPositionExitFields && (
                       <label className="text-sm">
-                        <div className="mb-1 text-slate-600">Exited At</div>
+                        <div className="mb-1 text-slate-600">청산일</div>
                         <input
                           type="date"
                           value={draft.exited_at}
@@ -1143,7 +1147,7 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
                     )}
                     {showPositionExitFields && (
                       <label className="text-sm">
-                        <div className="mb-1 text-slate-600">Exited Price</div>
+                        <div className="mb-1 text-slate-600">청산가</div>
                         <input
                           type="number"
                           value={draft.exited_price}
@@ -1164,14 +1168,14 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
                 disabled={isSaving}
                 className="rounded-lg bg-slate-900 px-3 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:bg-slate-400"
               >
-                {isSaving ? "Saving..." : editingId === null ? "Save Call" : "Save Changes"}
+                {isSaving ? "저장 중..." : editingId === null ? "콜 저장" : "변경사항 저장"}
               </button>
               <button
                 type="button"
                 onClick={closeComposer}
                 className="rounded-lg border border-slate-300 px-3 py-2 text-sm hover:bg-slate-50"
               >
-                Cancel
+                취소
               </button>
             </div>
           </div>
@@ -1190,22 +1194,22 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
       <section className="panel p-4">
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-6">
           <label className="text-sm xl:col-span-2">
-            <div className="mb-1 text-slate-600">Search</div>
+            <div className="mb-1 text-slate-600">검색</div>
             <input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Presenter, ticker, company, thesis..."
+              placeholder="발표자, 티커, 종목명, 아이디어 검색"
               className="w-full rounded-lg border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
             />
           </label>
           <label className="text-sm">
-            <div className="mb-1 text-slate-600">Presenter</div>
+            <div className="mb-1 text-slate-600">발표자</div>
             <select
               value={presenterFilter}
               onChange={(e) => setPresenterFilter(e.target.value)}
               className="w-full rounded-lg border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
             >
-              <option value="ALL">All</option>
+              <option value="ALL">전체</option>
               {presenters.map((presenter) => (
                 <option key={presenter} value={presenter}>
                   {presenter}
@@ -1214,13 +1218,13 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
             </select>
           </label>
           <label className="text-sm">
-            <div className="mb-1 text-slate-600">Direction</div>
+            <div className="mb-1 text-slate-600">방향</div>
             <select
               value={directionFilter}
               onChange={(e) => setDirectionFilter(e.target.value as "ALL" | StudyCallDirection)}
               className="w-full rounded-lg border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
             >
-              <option value="ALL">All</option>
+              <option value="ALL">전체</option>
               {CALL_DIRECTION_OPTIONS.map((option) => (
                 <option key={option.value} value={option.value}>
                   {option.label}
@@ -1235,7 +1239,7 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
               onChange={(e) => setStatusFilter(e.target.value)}
               className="w-full rounded-lg border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
             >
-              <option value="ALL">All</option>
+              <option value="ALL">전체</option>
               {statuses.map((status) => (
                 <option key={status} value={status}>
                   {status}
@@ -1244,15 +1248,15 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
             </select>
           </label>
           <label className="text-sm">
-            <div className="mb-1 text-slate-600">Portfolio</div>
+            <div className="mb-1 text-slate-600">포트폴리오</div>
             <select
               value={includedFilter}
               onChange={(e) => setIncludedFilter(e.target.value as "ALL" | "INCLUDED" | "EXCLUDED")}
               className="w-full rounded-lg border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
             >
-              <option value="ALL">All</option>
-              <option value="INCLUDED">Included only</option>
-              <option value="EXCLUDED">Not included</option>
+              <option value="ALL">전체</option>
+              <option value="INCLUDED">편입만 보기</option>
+              <option value="EXCLUDED">미편입만 보기</option>
             </select>
           </label>
         </div>
@@ -1260,11 +1264,11 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
           <div>헤더를 클릭하면 오름차순/내림차순 정렬이 됩니다.</div>
           <button
             type="button"
-            onClick={() => refreshIdeas(sortedIdeas, `Refreshed ${sortedIdeas.length} calls.`)}
+            onClick={() => refreshIdeas(sortedIdeas, `${sortedIdeas.length}개 콜의 현재가를 다시 불러왔습니다.`)}
             disabled={isRefreshingQuotes || sortedIdeas.length === 0}
             className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            {isRefreshingQuotes ? "Refreshing..." : "현재가 일괄 새로고침"}
+            {isRefreshingQuotes ? "불러오는 중..." : "현재가 일괄 새로고침"}
           </button>
         </div>
       </section>
@@ -1281,36 +1285,36 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
                 </th>
                 <th className="px-3 py-3">
                   <button type="button" onClick={() => toggleSort("presented_at")} className="font-medium hover:text-slate-900">
-                    Call Date {sortKey === "presented_at" ? (sortDirection === "asc" ? "↑" : "↓") : ""}
+                    콜 날짜 {sortKey === "presented_at" ? (sortDirection === "asc" ? "↑" : "↓") : ""}
                   </button>
                 </th>
                 <th className="px-3 py-3">
                   <button type="button" onClick={() => toggleSort("presenter")} className="font-medium hover:text-slate-900">
-                    Presenter {sortKey === "presenter" ? (sortDirection === "asc" ? "↑" : "↓") : ""}
+                    발표자 {sortKey === "presenter" ? (sortDirection === "asc" ? "↑" : "↓") : ""}
                   </button>
                 </th>
                 <th className="px-3 py-3">
                   <button type="button" onClick={() => toggleSort("call_direction")} className="font-medium hover:text-slate-900">
-                    Direction {sortKey === "call_direction" ? (sortDirection === "asc" ? "↑" : "↓") : ""}
+                    방향 {sortKey === "call_direction" ? (sortDirection === "asc" ? "↑" : "↓") : ""}
                   </button>
                 </th>
-                <th className="px-3 py-3">Status</th>
+                <th className="px-3 py-3">상태</th>
                 <th className="px-3 py-3 text-right">
                   <button type="button" onClick={() => toggleSort("tracking_return_pct")} className="font-medium hover:text-slate-900">
-                    Tracking Return {sortKey === "tracking_return_pct" ? (sortDirection === "asc" ? "↑" : "↓") : ""}
+                    추적 수익률 {sortKey === "tracking_return_pct" ? (sortDirection === "asc" ? "↑" : "↓") : ""}
                   </button>
                 </th>
                 <th className="px-3 py-3 text-right">
                   <button type="button" onClick={() => toggleSort("adoption_count")} className="font-medium hover:text-slate-900">
-                    Adoption {sortKey === "adoption_count" ? (sortDirection === "asc" ? "↑" : "↓") : ""}
+                    채택 수 {sortKey === "adoption_count" ? (sortDirection === "asc" ? "↑" : "↓") : ""}
                   </button>
                 </th>
                 <th className="px-3 py-3 text-right">
                   <button type="button" onClick={() => toggleSort("feedback_count")} className="font-medium hover:text-slate-900">
-                    Feedback {sortKey === "feedback_count" ? (sortDirection === "asc" ? "↑" : "↓") : ""}
+                    의견 수 {sortKey === "feedback_count" ? (sortDirection === "asc" ? "↑" : "↓") : ""}
                   </button>
                 </th>
-                <th className="px-3 py-3">Summary</th>
+                <th className="px-3 py-3">요약</th>
                 <th className="w-12 px-3 py-3" />
               </tr>
             </thead>
@@ -1330,7 +1334,7 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
                       <span>{idea.ticker}</span>
                       {idea.source_session && (
                         <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600">
-                          Session-linked
+                          발표 연결
                         </span>
                       )}
                       {idea.is_included && (
@@ -1367,7 +1371,7 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
                         type="button"
                         onClick={() => setMenuIdeaId((prev) => (prev === idea.id ? null : idea.id))}
                         className="rounded-lg border border-slate-200 px-2 py-1 text-sm text-slate-500 hover:bg-slate-100"
-                        aria-label="Row actions"
+                        aria-label="행 작업"
                       >
                         ⋯
                       </button>
@@ -1378,7 +1382,7 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
                             onClick={() => startEdit(idea)}
                             className="block w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-slate-50"
                           >
-                            Edit
+                            수정
                           </button>
                           <button
                             type="button"
@@ -1386,7 +1390,7 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
                             disabled={busyId === idea.id}
                             className="block w-full rounded-lg px-3 py-2 text-left text-sm text-rose-700 hover:bg-rose-50 disabled:opacity-50"
                           >
-                            {busyId === idea.id ? "Deleting..." : "Delete"}
+                            {busyId === idea.id ? "삭제 중..." : "삭제"}
                           </button>
                         </div>
                       )}
@@ -1397,7 +1401,7 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
               {sortedIdeas.length === 0 && (
                 <tr>
                   <td colSpan={10} className="px-3 py-10 text-center text-sm text-slate-500">
-                    No actionable calls matched the current filters.
+                    현재 조건에 맞는 콜이 없습니다.
                   </td>
                 </tr>
               )}
@@ -1414,7 +1418,7 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
           >
             <div className="flex items-start justify-between gap-4">
               <div>
-                <div className="text-xs uppercase tracking-[0.18em] text-slate-500">Actionable Call</div>
+                <div className="text-xs uppercase tracking-[0.18em] text-slate-500">콜 상세</div>
                 <h3 className="mt-2 text-2xl font-semibold text-slate-900">{selectedIdea.company_name}</h3>
                 <div className="mt-1 text-sm text-slate-500">{selectedIdea.ticker}</div>
               </div>
@@ -1424,7 +1428,7 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
                   onClick={() => startEdit(selectedIdea)}
                   className="rounded-lg border border-slate-300 px-3 py-2 text-sm hover:bg-slate-50"
                 >
-                  Edit
+                  수정
                 </button>
                 <button
                   type="button"
@@ -1479,36 +1483,36 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
                   onClick={() => setSelectedIdeaId(null)}
                   className="rounded-lg border border-slate-300 px-3 py-2 text-sm hover:bg-slate-50"
                 >
-                  Close
+                  닫기
                 </button>
               </div>
             </div>
 
             <div className="mt-5 grid grid-cols-2 gap-3 md:grid-cols-4">
               <div className="rounded-xl border border-slate-200 p-3 text-sm">
-                <div className="text-slate-500">Call Date</div>
+                <div className="text-slate-500">콜 날짜</div>
                 <div className="mt-1 font-medium text-slate-900">{selectedIdea.presented_at ?? "-"}</div>
               </div>
               <div className="rounded-xl border border-slate-200 p-3 text-sm">
-                <div className="text-slate-500">Presenter</div>
+                <div className="text-slate-500">발표자</div>
                 <div className="mt-1 font-medium text-slate-900">{selectedIdea.presenter}</div>
               </div>
               <div className="rounded-xl border border-slate-200 p-3 text-sm">
-                <div className="text-slate-500">Direction</div>
+                <div className="text-slate-500">방향</div>
                 <div className="mt-1 font-medium text-slate-900">{selectedIdea.call_direction}</div>
               </div>
               <div className="rounded-xl border border-slate-200 p-3 text-sm">
-                <div className="text-slate-500">Status</div>
+                <div className="text-slate-500">상태</div>
                 <div className="mt-1 font-medium text-slate-900">{selectedIdea.status ?? "-"}</div>
               </div>
             </div>
 
             {(selectedIdea.source_session || selectedIdea.source_coverage) && (
               <section className="mt-5 rounded-2xl border border-slate-200 p-4">
-                <div className="text-sm font-semibold text-slate-900">Source Session</div>
+                <div className="text-sm font-semibold text-slate-900">출처 발표</div>
                 <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
                   <div className="rounded-xl border border-slate-200 p-3 text-sm">
-                    <div className="text-slate-500">Session</div>
+                    <div className="text-slate-500">발표</div>
                     <div className="mt-1 font-medium text-slate-900">
                       {selectedSourceLabel ?? "-"}
                     </div>
@@ -1517,7 +1521,7 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
                     )}
                   </div>
                   <div className="rounded-xl border border-slate-200 p-3 text-sm">
-                    <div className="text-slate-500">Covered Company</div>
+                    <div className="text-slate-500">커버 종목</div>
                     <div className="mt-1 font-medium text-slate-900">
                       {selectedIdea.source_coverage
                         ? `${selectedIdea.source_coverage.company_name} (${selectedIdea.source_coverage.ticker})`
@@ -1525,7 +1529,7 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
                     </div>
                     {selectedIdea.source_coverage && (
                       <div className="mt-1 text-slate-600">
-                        stance: {selectedIdea.source_coverage.session_stance} / follow-up: {selectedIdea.source_coverage.follow_up_status}
+                        관점: {selectedIdea.source_coverage.session_stance} / 후속 상태: {selectedIdea.source_coverage.follow_up_status}
                       </div>
                     )}
                   </div>
@@ -1535,112 +1539,112 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
 
             <div className="mt-5 grid grid-cols-2 gap-3 md:grid-cols-4">
               <div className="rounded-xl border border-slate-200 p-3 text-sm">
-                <div className="text-slate-500">Pitch</div>
+                <div className="text-slate-500">발표가</div>
                 <div className="mt-1 font-medium text-slate-900">
                   {formatPrice(selectedIdea.pitch_price, selectedIdea.currency)}
                 </div>
               </div>
               <div className="rounded-xl border border-slate-200 p-3 text-sm">
-                <div className="text-slate-500">Current</div>
+                <div className="text-slate-500">현재가</div>
                 <div className="mt-1 font-medium text-slate-900">
                   {formatPrice(selectedIdea.current_price, selectedIdea.currency)}
                 </div>
               </div>
               <div className="rounded-xl border border-slate-200 p-3 text-sm">
-                <div className="text-slate-500">Target</div>
+                <div className="text-slate-500">목표가</div>
                 <div className="mt-1 font-medium text-slate-900">
                   {formatPrice(selectedIdea.target_price, selectedIdea.currency)}
                 </div>
               </div>
               <div className="rounded-xl border border-slate-200 p-3 text-sm">
-                <div className="text-slate-500">Tracking Return</div>
+                <div className="text-slate-500">추적 수익률</div>
                 <div className={`mt-1 font-medium ${toneClass(selectedIdea.tracking_return_pct)}`}>
                   {formatPct(selectedIdea.tracking_return_pct)}
                 </div>
               </div>
               <div className="rounded-xl border border-slate-200 p-3 text-sm">
-                <div className="text-slate-500">Conviction</div>
+                <div className="text-slate-500">확신도</div>
                 <div className="mt-1 font-medium text-slate-900">{selectedIdea.conviction_score ?? "-"}</div>
               </div>
               <div className="rounded-xl border border-slate-200 p-3 text-sm">
-                <div className="text-slate-500">Time Horizon</div>
+                <div className="text-slate-500">투자 기간</div>
                 <div className="mt-1 font-medium text-slate-900">{selectedIdea.time_horizon ?? "-"}</div>
               </div>
               <div className="rounded-xl border border-slate-200 p-3 text-sm">
-                <div className="text-slate-500">Adoption</div>
+                <div className="text-slate-500">채택 수</div>
                 <div className="mt-1 font-medium text-slate-900">{selectedIdea.adoption_count}</div>
               </div>
               <div className="rounded-xl border border-slate-200 p-3 text-sm">
-                <div className="text-slate-500">Feedback</div>
+                <div className="text-slate-500">의견 수</div>
                 <div className="mt-1 font-medium text-slate-900">{selectedIdea.feedback_count}</div>
               </div>
             </div>
 
             <section className="mt-5 grid grid-cols-1 gap-3 md:grid-cols-2">
               <div className="rounded-xl border border-slate-200 p-3 text-sm">
-                <div className="text-slate-500">Current Source</div>
+                <div className="text-slate-500">현재가 출처</div>
                 <div className="mt-1 text-slate-900">{describeCurrentPriceSource(selectedIdea)}</div>
               </div>
               <div className="rounded-xl border border-slate-200 p-3 text-sm">
-                <div className="text-slate-500">Tracking Formula</div>
+                <div className="text-slate-500">추적 수익률 계산식</div>
                 <div className="mt-1 text-slate-900">{describeTrackingFormula(selectedIdea)}</div>
               </div>
             </section>
 
             <section className="mt-5 rounded-2xl border border-slate-200 p-4">
-              <div className="text-sm font-semibold text-slate-900">Portfolio Layer</div>
+              <div className="text-sm font-semibold text-slate-900">포트폴리오 레이어</div>
               {selectedIdea.is_included ? (
                 <div className="mt-4 grid grid-cols-2 gap-3 md:grid-cols-4">
                   <div className="rounded-xl border border-slate-200 p-3 text-sm">
-                    <div className="text-slate-500">Included At</div>
+                    <div className="text-slate-500">편입일</div>
                     <div className="mt-1 font-medium text-slate-900">{selectedIdea.included_at ?? "-"}</div>
                   </div>
                   <div className="rounded-xl border border-slate-200 p-3 text-sm">
-                    <div className="text-slate-500">Included Price</div>
+                    <div className="text-slate-500">편입가</div>
                     <div className="mt-1 font-medium text-slate-900">
                       {formatPrice(selectedIdea.included_price, selectedIdea.currency)}
                     </div>
                   </div>
                   <div className="rounded-xl border border-slate-200 p-3 text-sm">
-                    <div className="text-slate-500">Portfolio Return</div>
+                    <div className="text-slate-500">포트폴리오 수익률</div>
                     <div className={`mt-1 font-medium ${toneClass(selectedIdea.portfolio_return_pct)}`}>
                       {formatPct(selectedIdea.portfolio_return_pct)}
                     </div>
                   </div>
                   <div className="rounded-xl border border-slate-200 p-3 text-sm">
-                    <div className="text-slate-500">Position Status</div>
+                    <div className="text-slate-500">포지션 상태</div>
                     <div className="mt-1 font-medium text-slate-900">{selectedIdea.position_status ?? "-"}</div>
                   </div>
                 </div>
               ) : (
-                <div className="mt-3 text-sm text-slate-500">아직 Included Portfolio에는 들어가지 않은 콜입니다.</div>
+                <div className="mt-3 text-sm text-slate-500">아직 편입 포트폴리오에 들어가지 않은 콜입니다.</div>
               )}
             </section>
 
             <div className="mt-5 space-y-4">
               <section className="rounded-2xl border border-slate-200 p-4">
-                <div className="text-sm font-semibold text-slate-900">Thesis</div>
+                <div className="text-sm font-semibold text-slate-900">투자 아이디어</div>
                 <div className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">{selectedIdea.thesis ?? "-"}</div>
               </section>
               <section className="rounded-2xl border border-slate-200 p-4">
-                <div className="text-sm font-semibold text-slate-900">Trigger / Risk / Invalidation</div>
+                <div className="text-sm font-semibold text-slate-900">이벤트 / 리스크 / 무효화 조건</div>
                 <div className="mt-3 grid gap-3 md:grid-cols-3">
                   <div>
-                    <div className="text-xs uppercase tracking-[0.18em] text-slate-500">Trigger</div>
+                    <div className="text-xs uppercase tracking-[0.18em] text-slate-500">이벤트</div>
                     <div className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">{selectedIdea.trigger ?? "-"}</div>
                   </div>
                   <div>
-                    <div className="text-xs uppercase tracking-[0.18em] text-slate-500">Risk</div>
+                    <div className="text-xs uppercase tracking-[0.18em] text-slate-500">리스크</div>
                     <div className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">{selectedIdea.risk ?? "-"}</div>
                   </div>
                   <div>
-                    <div className="text-xs uppercase tracking-[0.18em] text-slate-500">Invalidation</div>
+                    <div className="text-xs uppercase tracking-[0.18em] text-slate-500">무효화 조건</div>
                     <div className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">{selectedIdea.invalidation_rule ?? "-"}</div>
                   </div>
                 </div>
               </section>
               <section className="rounded-2xl border border-slate-200 p-4">
-                <div className="text-sm font-semibold text-slate-900">Summary Note</div>
+                <div className="text-sm font-semibold text-slate-900">한 줄 요약 / 메모</div>
                 <div className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">{selectedIdea.note ?? "-"}</div>
               </section>
             </div>
@@ -1648,14 +1652,14 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
             <section className="mt-5 rounded-2xl border border-slate-200 p-4">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
-                  <div className="text-sm font-semibold text-slate-900">Feedback</div>
-                  <div className="mt-1 text-xs text-slate-500">agree / neutral / disagree 기반 MVP</div>
+                  <div className="text-sm font-semibold text-slate-900">의견</div>
+                  <div className="mt-1 text-xs text-slate-500">동의 / 중립 / 반대 기준으로 의견을 남길 수 있습니다.</div>
                 </div>
-                <div className="text-sm text-slate-500">{selectedIdea.feedback_count} responses</div>
+                <div className="text-sm text-slate-500">{selectedIdea.feedback_count}개 의견</div>
               </div>
               <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
                 <label className="text-sm">
-                  <div className="mb-1 text-slate-600">Participant</div>
+                  <div className="mb-1 text-slate-600">참가자</div>
                   <select
                     value={feedbackParticipantId}
                     onChange={(e) => setFeedbackParticipantId(e.target.value)}
@@ -1669,7 +1673,7 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
                   </select>
                 </label>
                 <label className="text-sm">
-                  <div className="mb-1 text-slate-600">Stance</div>
+                  <div className="mb-1 text-slate-600">의견</div>
                   <select
                     value={feedbackStance}
                     onChange={(e) => setFeedbackStance(e.target.value as StudyCallFeedbackStance)}
@@ -1683,7 +1687,7 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
                   </select>
                 </label>
                 <label className="text-sm md:col-span-1">
-                  <div className="mb-1 text-slate-600">Note</div>
+                  <div className="mb-1 text-slate-600">메모</div>
                   <input
                     value={feedbackNote}
                     onChange={(e) => setFeedbackNote(e.target.value)}
@@ -1697,11 +1701,11 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
                 disabled={busyId === selectedIdea.id || !feedbackParticipantId}
                 className="mt-3 rounded-lg border border-slate-300 px-3 py-2 text-sm hover:bg-slate-50 disabled:opacity-50"
               >
-                Save Feedback
+                의견 저장
               </button>
               <div className="mt-4 space-y-3">
                 {selectedIdea.feedbacks.length === 0 ? (
-                  <div className="text-sm text-slate-500">No feedback yet.</div>
+                  <div className="text-sm text-slate-500">아직 남겨진 의견이 없습니다.</div>
                 ) : (
                   selectedIdea.feedbacks.map((feedback) => (
                     <div key={feedback.id} className="rounded-xl border border-slate-200 p-3 text-sm">
@@ -1719,14 +1723,14 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
             <section className="mt-5 rounded-2xl border border-slate-200 p-4">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
-                  <div className="text-sm font-semibold text-slate-900">Update Timeline / Postmortem</div>
+                  <div className="text-sm font-semibold text-slate-900">업데이트 타임라인 / 사후 복기</div>
                   <div className="mt-1 text-xs text-slate-500">materially new call이 아니면 새 row 대신 timeline에 기록합니다.</div>
                 </div>
-                <div className="text-sm text-slate-500">{selectedIdea.update_count} updates</div>
+                <div className="text-sm text-slate-500">{selectedIdea.update_count}개 업데이트</div>
               </div>
               <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
                 <label className="text-sm">
-                  <div className="mb-1 text-slate-600">Type</div>
+                  <div className="mb-1 text-slate-600">유형</div>
                   <select
                     value={updateType}
                     onChange={(e) => setUpdateType(e.target.value as StudyCallUpdateType)}
@@ -1740,7 +1744,7 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
                   </select>
                 </label>
                 <label className="text-sm">
-                  <div className="mb-1 text-slate-600">Created By</div>
+                  <div className="mb-1 text-slate-600">작성자</div>
                   <input
                     value={updateAuthor}
                     onChange={(e) => setUpdateAuthor(e.target.value)}
@@ -1748,7 +1752,7 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
                   />
                 </label>
                 <label className="text-sm md:col-span-2">
-                  <div className="mb-1 text-slate-600">Title</div>
+                  <div className="mb-1 text-slate-600">제목</div>
                   <input
                     value={updateTitle}
                     onChange={(e) => setUpdateTitle(e.target.value)}
@@ -1756,7 +1760,7 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
                   />
                 </label>
                 <label className="text-sm md:col-span-2">
-                  <div className="mb-1 text-slate-600">Body</div>
+                  <div className="mb-1 text-slate-600">내용</div>
                   <textarea
                     rows={4}
                     value={updateBody}
@@ -1771,11 +1775,11 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
                 disabled={busyId === selectedIdea.id || !updateBody.trim()}
                 className="mt-3 rounded-lg border border-slate-300 px-3 py-2 text-sm hover:bg-slate-50 disabled:opacity-50"
               >
-                Save Update
+                업데이트 저장
               </button>
               <div className="mt-4 space-y-3">
                 {selectedIdea.updates.length === 0 ? (
-                  <div className="text-sm text-slate-500">No updates yet.</div>
+                  <div className="text-sm text-slate-500">아직 업데이트가 없습니다.</div>
                 ) : (
                   selectedIdea.updates.map((update) => (
                     <div key={update.id} className="rounded-xl border border-slate-200 p-3 text-sm">
@@ -1796,12 +1800,12 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
 
             <section className="mt-5 rounded-2xl border border-slate-200 p-4">
               <div className="flex flex-wrap items-center justify-between gap-3">
-                <div className="text-sm font-semibold text-slate-900">Linked Trades</div>
-                <div className="text-sm text-slate-500">{selectedIdea.linked_trade_count} trades</div>
+                <div className="text-sm font-semibold text-slate-900">연결된 거래</div>
+                <div className="text-sm text-slate-500">{selectedIdea.linked_trade_count}건</div>
               </div>
               <div className="mt-4 space-y-3">
                 {selectedIdea.linked_trades.length === 0 ? (
-                  <div className="text-sm text-slate-500">No participant trades are linked to this call yet.</div>
+                  <div className="text-sm text-slate-500">아직 이 콜에 연결된 참가자 거래가 없습니다.</div>
                 ) : (
                   selectedIdea.linked_trades.map((trade) => (
                     <div key={trade.id} className="rounded-xl border border-slate-200 p-3 text-sm">

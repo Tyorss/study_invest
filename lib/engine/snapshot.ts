@@ -55,6 +55,13 @@ class ValueCache {
   }
 }
 
+function resolveUsableMarkPrice(price: number | null, fallback: number): number {
+  if (!Number.isFinite(price ?? NaN) || (price ?? 0) <= 0) {
+    return fallback;
+  }
+  return price as number;
+}
+
 function marketDefaults() {
   return { feeRate: 0, slippageBps: 0 };
 }
@@ -175,8 +182,10 @@ export async function rebuildPortfolioState(
   const outPositions: PositionState[] = [];
 
   for (const pos of positions.values()) {
-    const px =
-      (await cache.priceOnOrBefore(pos.instrument.id, snapshotDate)) ?? pos.avg_cost_local;
+    const px = resolveUsableMarkPrice(
+      await cache.priceOnOrBefore(pos.instrument.id, snapshotDate),
+      pos.avg_cost_local,
+    );
     const isUsd = pos.instrument.currency === "USD";
     const fx = isUsd ? await cache.fxOnOrBefore(snapshotDate) : 1;
     if (isUsd && !fx) {

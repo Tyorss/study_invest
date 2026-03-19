@@ -18,7 +18,7 @@ type Point = {
 export function DrawdownChart({ data }: { data: Point[] }) {
   return (
     <div className="panel p-4">
-      <h3 className="text-base font-semibold text-slate-900">Drawdown</h3>
+      <h3 className="text-base font-semibold text-slate-900">낙폭 추이</h3>
       <div className="mt-4 h-64 w-full">
         <ResponsiveContainer width="100%" height="100%">
           <AreaChart data={data}>

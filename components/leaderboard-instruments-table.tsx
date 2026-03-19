@@ -11,7 +11,7 @@ function renderStat(
   if (!item) return "-";
   return (
     <>
-      {item.symbol}{" "}
+      {item.label ?? item.symbol}{" "}
       <span className={mono ? "num" : undefined}>({formatter(item.value)})</span>
     </>
   );
@@ -23,29 +23,27 @@ export function LeaderboardInstrumentsTable({
   rows: LeaderboardInstrumentsRow[];
 }) {
   return (
-    <div className="panel overflow-auto">
-      <div className="border-b border-slate-200 px-4 py-3 text-sm font-semibold">
-        Instrument Leaderboard (Top1/2/3 by Return, Weight, Unrealized PnL)
+    <div className="overflow-auto">
+      <div className="border-b border-slate-200 px-4 py-3 text-sm font-semibold text-slate-900">
+        참가자별 상위 종목 현황
       </div>
       <table className="min-w-full text-sm">
         <thead className="bg-slate-50 text-slate-600">
           <tr>
             {[
-              "Name",
-              "Cash Ratio",
-              "Turnover20D",
-              "Rtn Top1",
-              "Rtn Top2",
-              "Rtn Top3",
-              "Wgt Top1",
-              "Wgt Top2",
-              "Wgt Top3",
-              "PnL Top1",
-              "PnL Top2",
-              "PnL Top3",
-            ].map((h) => (
-              <th key={h} className="whitespace-nowrap px-3 py-3 text-left font-semibold">
-                {h}
+              "참가자",
+              "현금 비중",
+              "20일 회전율",
+              "수익률 상위 1",
+              "수익률 상위 2",
+              "수익률 상위 3",
+              "비중 상위 1",
+              "비중 상위 2",
+              "평가손익 상위 1",
+              "평가손익 상위 2",
+            ].map((heading) => (
+              <th key={heading} className="whitespace-nowrap px-3 py-3 text-left font-semibold">
+                {heading}
               </th>
             ))}
           </tr>
@@ -62,39 +60,19 @@ export function LeaderboardInstrumentsTable({
               </td>
               <td className="num whitespace-nowrap px-3 py-3">{formatPct(row.cash_ratio)}</td>
               <td className="num whitespace-nowrap px-3 py-3">{formatPct(row.turnover_20d)}</td>
-              <td className="whitespace-nowrap px-3 py-3">
-                {renderStat(row.top_return, 0, formatPct)}
-              </td>
-              <td className="whitespace-nowrap px-3 py-3">
-                {renderStat(row.top_return, 1, formatPct)}
-              </td>
-              <td className="whitespace-nowrap px-3 py-3">
-                {renderStat(row.top_return, 2, formatPct)}
-              </td>
-              <td className="whitespace-nowrap px-3 py-3">
-                {renderStat(row.top_weight, 0, formatPct)}
-              </td>
-              <td className="whitespace-nowrap px-3 py-3">
-                {renderStat(row.top_weight, 1, formatPct)}
-              </td>
-              <td className="whitespace-nowrap px-3 py-3">
-                {renderStat(row.top_weight, 2, formatPct)}
-              </td>
-              <td className="whitespace-nowrap px-3 py-3">
-                {renderStat(row.top_unrealized, 0, formatKrw, false)}
-              </td>
-              <td className="whitespace-nowrap px-3 py-3">
-                {renderStat(row.top_unrealized, 1, formatKrw, false)}
-              </td>
-              <td className="whitespace-nowrap px-3 py-3">
-                {renderStat(row.top_unrealized, 2, formatKrw, false)}
-              </td>
+              <td className="whitespace-nowrap px-3 py-3">{renderStat(row.top_return, 0, formatPct)}</td>
+              <td className="whitespace-nowrap px-3 py-3">{renderStat(row.top_return, 1, formatPct)}</td>
+              <td className="whitespace-nowrap px-3 py-3">{renderStat(row.top_return, 2, formatPct)}</td>
+              <td className="whitespace-nowrap px-3 py-3">{renderStat(row.top_weight, 0, formatPct)}</td>
+              <td className="whitespace-nowrap px-3 py-3">{renderStat(row.top_weight, 1, formatPct)}</td>
+              <td className="whitespace-nowrap px-3 py-3">{renderStat(row.top_unrealized, 0, formatKrw, false)}</td>
+              <td className="whitespace-nowrap px-3 py-3">{renderStat(row.top_unrealized, 1, formatKrw, false)}</td>
             </tr>
           ))}
           {rows.length === 0 && (
             <tr>
-              <td colSpan={12} className="px-3 py-10 text-center text-slate-500">
-                No instrument ranking data.
+              <td colSpan={10} className="px-3 py-10 text-center text-slate-500">
+                표시할 종목 데이터가 없습니다.
               </td>
             </tr>
           )}

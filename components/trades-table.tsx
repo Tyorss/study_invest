@@ -31,6 +31,20 @@ type ApiResponse = {
   error?: string;
 };
 
+function sideLabel(side: TradeRow["side"]) {
+  if (side === "BUY") return "매수";
+  if (side === "SELL") return "매도";
+  return "전량 정리";
+}
+
+function normalizeSideInput(value: string): TradeRow["side"] | null {
+  const normalized = value.trim().toUpperCase();
+  if (normalized === "BUY" || normalized === "매수") return "BUY";
+  if (normalized === "SELL" || normalized === "매도") return "SELL";
+  if (normalized === "CLOSE" || normalized === "전량정리" || normalized === "전량 정리") return "CLOSE";
+  return null;
+}
+
 async function readApiResponse(res: Response): Promise<ApiResponse> {
   const contentType = res.headers.get("content-type") ?? "";
   if (!contentType.includes("application/json")) {
@@ -38,6 +52,15 @@ async function readApiResponse(res: Response): Promise<ApiResponse> {
     return { ok: false, error: text?.trim() || `HTTP ${res.status}` };
   }
   return (await res.json()) as ApiResponse;
+}
+
+function translateError(message: string) {
+  if (message.includes("Quantity must be a positive integer")) return "수량은 1 이상의 정수여야 합니다.";
+  if (message.includes("Price must be greater than 0")) return "가격은 0보다 커야 합니다.";
+  if (message.includes("Side must be BUY, SELL, or CLOSE")) return "구분은 BUY, SELL, CLOSE 중 하나여야 합니다.";
+  if (message.includes("Failed to update trade")) return "거래 수정에 실패했습니다.";
+  if (message.includes("Failed to delete trade")) return "거래 삭제에 실패했습니다.";
+  return message;
 }
 
 export function TradesTable({ rows }: { rows: TradeRow[] }) {
@@ -58,38 +81,41 @@ export function TradesTable({ rows }: { rows: TradeRow[] }) {
 
   async function onEdit(row: TradeRow) {
     setError(null);
-    const tradeDate = window.prompt("Trade Date (YYYY-MM-DD)", row.trade_date);
+    const tradeDate = window.prompt("거래일 (YYYY-MM-DD)", row.trade_date);
     if (tradeDate === null) return;
 
-    const sideInput = window.prompt("Side (BUY / SELL / CLOSE)", row.side);
+    const sideInput = window.prompt(
+      "거래 구분 (매수 / 매도 / 전량 정리 또는 BUY / SELL / CLOSE)",
+      sideLabel(row.side),
+    );
     if (sideInput === null) return;
-    const side = sideInput.trim().toUpperCase();
-    if (!["BUY", "SELL", "CLOSE"].includes(side)) {
-      setError("Side must be BUY, SELL, or CLOSE.");
+    const side = normalizeSideInput(sideInput);
+    if (!side) {
+      setError("구분은 BUY, SELL, CLOSE 중 하나여야 합니다.");
       return;
     }
 
     let quantity: number | undefined;
     if (side !== "CLOSE") {
-      const qtyInput = window.prompt("Quantity (positive integer)", `${Math.round(row.quantity)}`);
+      const qtyInput = window.prompt("수량 (1 이상의 정수)", `${Math.round(row.quantity)}`);
       if (qtyInput === null) return;
       const qty = Number(qtyInput);
       if (!Number.isFinite(qty) || qty <= 0 || !Number.isInteger(qty)) {
-        setError("Quantity must be a positive integer.");
+        setError("수량은 1 이상의 정수여야 합니다.");
         return;
       }
       quantity = qty;
     }
 
-    const priceInput = window.prompt("Price (> 0)", `${row.price}`);
+    const priceInput = window.prompt("가격", `${row.price}`);
     if (priceInput === null) return;
     const price = Number(priceInput);
     if (!Number.isFinite(price) || price <= 0) {
-      setError("Price must be greater than 0.");
+      setError("가격은 0보다 커야 합니다.");
       return;
     }
 
-    const noteInput = window.prompt("Note", row.note ?? "");
+    const noteInput = window.prompt("메모", row.note ?? "");
     if (noteInput === null) return;
 
     try {
@@ -112,7 +138,8 @@ export function TradesTable({ rows }: { rows: TradeRow[] }) {
       }
       router.refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to update trade");
+      const message = err instanceof Error ? err.message : "거래 수정에 실패했습니다.";
+      setError(translateError(message));
     } finally {
       setBusyId(null);
     }
@@ -120,7 +147,7 @@ export function TradesTable({ rows }: { rows: TradeRow[] }) {
 
   async function onDelete(row: TradeRow) {
     setError(null);
-    const ok = window.confirm(`Delete trade #${row.id}?`);
+    const ok = window.confirm(`거래 #${row.id}를 삭제할까요?`);
     if (!ok) return;
 
     try {
@@ -134,7 +161,8 @@ export function TradesTable({ rows }: { rows: TradeRow[] }) {
       }
       router.refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to delete trade");
+      const message = err instanceof Error ? err.message : "거래 삭제에 실패했습니다.";
+      setError(translateError(message));
     } finally {
       setBusyId(null);
     }
@@ -143,12 +171,12 @@ export function TradesTable({ rows }: { rows: TradeRow[] }) {
   return (
     <div className="panel overflow-auto">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
-        <div className="text-sm font-semibold">Trades Journal</div>
+        <div className="text-sm font-semibold">거래 내역</div>
         <div className="flex flex-wrap gap-2">
           {[
-            ["ALL", "All"],
-            ["LINKED", "Linked to Study"],
-            ["INDEPENDENT", "Independent"],
+            ["ALL", "전체"],
+            ["LINKED", "스터디 연동"],
+            ["INDEPENDENT", "개별 거래"],
           ].map(([value, label]) => {
             const active = scope === value;
             return (
@@ -170,55 +198,55 @@ export function TradesTable({ rows }: { rows: TradeRow[] }) {
       <table className="min-w-full text-sm">
         <thead className="bg-slate-50 text-slate-600">
           <tr>
-            {["Date", "Symbol", "Study Call", "Side", "Qty", "Price", "Note", "Action"].map((h) => (
-              <th key={h} className="whitespace-nowrap px-3 py-3 text-left font-semibold">
-                {h}
+            {["거래일", "종목", "연결된 스터디 콜", "구분", "수량", "가격", "메모", "수정"].map((heading) => (
+              <th key={heading} className="whitespace-nowrap px-3 py-3 text-left font-semibold">
+                {heading}
               </th>
             ))}
           </tr>
         </thead>
         <tbody>
-          {filteredRows.map((r) => {
-            const market = r.instruments?.market;
+          {filteredRows.map((row) => {
+            const market = row.instruments?.market;
             const priceDigits = market === "KR" ? 0 : market === "US" ? 1 : 4;
-            const isBusy = busyId === r.id;
+            const isBusy = busyId === row.id;
             return (
-              <tr key={r.id} className="border-t border-slate-200/70">
-                <td className="px-3 py-3">{r.trade_date}</td>
-                <td className="px-3 py-3">{r.instruments?.symbol ?? "-"}</td>
+              <tr key={row.id} className="border-t border-slate-200/70">
+                <td className="px-3 py-3">{row.trade_date}</td>
+                <td className="px-3 py-3">{row.instruments?.symbol ?? "-"}</td>
                 <td className="px-3 py-3">
-                  {r.linked_call ? (
+                  {row.linked_call ? (
                     <div className="text-xs leading-5 text-slate-600">
-                      <div className="font-medium text-slate-900">{r.linked_call.ticker}</div>
+                      <div className="font-medium text-slate-900">{row.linked_call.ticker}</div>
                       <div>
-                        {r.linked_call.company_name} · {r.linked_call.presenter}
+                        {row.linked_call.company_name} · {row.linked_call.presenter}
                       </div>
                     </div>
                   ) : (
-                    <span className="text-xs text-slate-400">Independent</span>
+                    <span className="text-xs text-slate-400">개별 거래</span>
                   )}
                 </td>
-                <td className="px-3 py-3">{r.side}</td>
-                <td className="num px-3 py-3">{formatNum(r.quantity, 0)}</td>
-                <td className="num px-3 py-3">{formatNum(r.price, priceDigits)}</td>
-                <td className="px-3 py-3">{r.note ?? ""}</td>
+                <td className="px-3 py-3">{sideLabel(row.side)}</td>
+                <td className="num px-3 py-3">{formatNum(row.quantity, 0)}</td>
+                <td className="num px-3 py-3">{formatNum(row.price, priceDigits)}</td>
+                <td className="px-3 py-3">{row.note ?? ""}</td>
                 <td className="px-3 py-3">
                   <div className="flex items-center gap-2">
                     <button
                       type="button"
                       disabled={isBusy || busyId !== null}
-                      onClick={() => onEdit(r)}
+                      onClick={() => onEdit(row)}
                       className="rounded-md border border-slate-300 px-2 py-1 text-xs hover:bg-slate-50 disabled:opacity-60"
                     >
-                      Edit
+                      수정
                     </button>
                     <button
                       type="button"
                       disabled={isBusy || busyId !== null}
-                      onClick={() => onDelete(r)}
+                      onClick={() => onDelete(row)}
                       className="rounded-md border border-rose-300 px-2 py-1 text-xs text-rose-700 hover:bg-rose-50 disabled:opacity-60"
                     >
-                      Delete
+                      삭제
                     </button>
                   </div>
                 </td>
@@ -228,7 +256,7 @@ export function TradesTable({ rows }: { rows: TradeRow[] }) {
           {filteredRows.length === 0 && (
             <tr>
               <td colSpan={8} className="px-3 py-10 text-center text-slate-500">
-                No trades
+                표시할 거래가 없습니다.
               </td>
             </tr>
           )}

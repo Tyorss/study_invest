@@ -180,6 +180,7 @@ export interface LeaderboardRow {
 
 export interface RankedInstrumentStat {
   symbol: string;
+  label?: string;
   value: number;
 }
 
@@ -192,6 +193,20 @@ export interface LeaderboardInstrumentsRow {
   top_return: RankedInstrumentStat[];
   top_weight: RankedInstrumentStat[];
   top_unrealized: RankedInstrumentStat[];
+}
+
+export interface MissingPriceHoldingRow {
+  participant_id: string;
+  participant_name: string;
+  color_tag: string;
+  valuation_date: string;
+  symbol: string;
+  name: string;
+  market: Market;
+  currency: Currency;
+  quantity: number;
+  avg_cost_local: number;
+  fallback_mark_local: number;
 }
 
 export interface JobRunInsert {

@@ -13,17 +13,17 @@ import type {
 } from "@/types/study-tracker";
 
 const STANCE_OPTIONS: Array<{ value: StudySessionStance; label: string }> = [
-  { value: "bullish", label: "Bullish" },
-  { value: "watch", label: "Watch" },
-  { value: "neutral", label: "Neutral" },
-  { value: "avoid", label: "Avoid" },
+  { value: "bullish", label: "긍정" },
+  { value: "watch", label: "관찰" },
+  { value: "neutral", label: "중립" },
+  { value: "avoid", label: "회피" },
 ];
 
 const FOLLOW_UP_OPTIONS: Array<{ value: StudySessionFollowUpStatus; label: string }> = [
-  { value: "waiting_event", label: "Waiting Event" },
-  { value: "ready_for_call", label: "Ready for Call" },
-  { value: "dropped", label: "Dropped" },
-  { value: "converted", label: "Converted" },
+  { value: "waiting_event", label: "이벤트 대기" },
+  { value: "ready_for_call", label: "콜 준비 완료" },
+  { value: "dropped", label: "보류/중단" },
+  { value: "converted", label: "콜 전환 완료" },
 ];
 
 type SessionDraft = {
@@ -145,12 +145,6 @@ async function readApiResponse<T>(res: Response): Promise<T> {
   return (await res.json()) as T;
 }
 
-function callDirectionFromStance(stance: StudySessionStance) {
-  if (stance === "bullish") return "long";
-  if (stance === "avoid") return "avoid";
-  return "watch";
-}
-
 export function StudySessionsBoard({ data }: { data: StudySessionData }) {
   const router = useRouter();
   const [sessions, setSessions] = useState(data.sessions);
@@ -229,20 +223,20 @@ export function StudySessionsBoard({ data }: { data: StudySessionData }) {
       });
       const json = await readApiResponse<SessionResponse>(res);
       if (!res.ok || !json.ok || !json.session) {
-        throw new Error(json.error ?? `Failed to save session (HTTP ${res.status})`);
+        throw new Error(json.error ?? `자유 종목을 저장하지 못했습니다. (HTTP ${res.status})`);
       }
       if (isNew) {
         setSessions((prev) => [{ ...json.session!, companies: [], covered_count: 0, converted_count: 0, adoption_count: 0 }, ...prev]);
         setSelectedSessionId(json.session.id);
         setCreatingSession(false);
-        setMessage("Session created.");
+        setMessage("자유 종목을 등록했습니다.");
       } else {
         setSessions((prev) => prev.map((session) => (session.id === json.session!.id ? { ...session, ...json.session! } : session)));
-        setMessage("Session updated.");
+        setMessage("자유 종목을 수정했습니다.");
       }
       router.refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to save session");
+      setError(err instanceof Error ? err.message : "자유 종목을 저장하지 못했습니다.");
     } finally {
       setIsSavingSession(false);
     }
@@ -267,7 +261,7 @@ export function StudySessionsBoard({ data }: { data: StudySessionData }) {
       });
       const json = await readApiResponse<SessionResponse>(res);
       if (!res.ok || !json.ok || !json.company) {
-        throw new Error(json.error ?? `Failed to save company (HTTP ${res.status})`);
+        throw new Error(json.error ?? `관련 종목을 저장하지 못했습니다. (HTTP ${res.status})`);
       }
       setSessions((prev) =>
         prev.map((session) => {
@@ -288,17 +282,17 @@ export function StudySessionsBoard({ data }: { data: StudySessionData }) {
         }),
       );
       resetCompanyEditor();
-      setMessage(isNew ? "Covered company added." : "Covered company updated.");
+      setMessage(isNew ? "관련 종목을 추가했습니다." : "관련 종목을 수정했습니다.");
       router.refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to save covered company");
+      setError(err instanceof Error ? err.message : "관련 종목을 저장하지 못했습니다.");
     } finally {
       setIsSavingCompany(false);
     }
   }
 
   async function deleteCompany(company: StudySessionCompany) {
-    if (!window.confirm(`${company.company_name} (${company.ticker})를 session coverage에서 제거할까요?`)) return;
+    if (!window.confirm(`${company.company_name} (${company.ticker})를 관련 종목 목록에서 제거할까요?`)) return;
     setBusyCompanyId(company.id);
     setMessage(null);
     setError(null);
@@ -319,39 +313,33 @@ export function StudySessionsBoard({ data }: { data: StudySessionData }) {
         }),
       );
       if (editingCompanyId === company.id) resetCompanyEditor();
-      setMessage("Covered company removed.");
+      setMessage("관련 종목을 삭제했습니다.");
       router.refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to delete covered company");
+      setError(err instanceof Error ? err.message : "관련 종목을 삭제하지 못했습니다.");
     } finally {
       setBusyCompanyId(null);
     }
   }
 
-  function createActionableCall(session: StudySession, company: StudySessionCompany) {
-    const params = new URLSearchParams({
-      compose: "1",
-      sourceSessionId: String(session.id),
-      sourceCoverageId: String(company.id),
-      presenter: session.presenter,
-      companyName: company.company_name,
-      ticker: company.ticker,
-      sector: company.sector ?? "",
-      callDirection: callDirectionFromStance(company.session_stance),
-      sourceSessionLabel: `${session.industry_name} · ${session.presenter}`,
-      sourceCoverageLabel: `${company.company_name} (${company.ticker})`,
-    });
-    router.push(`/study-tracker?${params.toString()}`);
-  }
+  const distinctPresenterCount = useMemo(
+    () => new Set(sessions.map((session) => session.presenter.trim()).filter(Boolean)).size,
+    [sessions],
+  );
+
+  const sessionWithMostCompanies = useMemo(() => {
+    if (sessions.length === 0) return null;
+    return [...sessions].sort((a, b) => b.covered_count - a.covered_count)[0] ?? null;
+  }, [sessions]);
 
   const summaryCards = [
-    { title: "Total Sessions", value: String(data.summary.totalSessions) },
-    { title: "Covered Companies", value: String(data.summary.totalCoveredCompanies) },
-    { title: "Converted Calls", value: String(data.summary.totalConvertedCalls) },
+    { title: "전체 글 수", value: String(sessions.length) },
+    { title: "등록 종목 수", value: String(sessions.reduce((sum, session) => sum + session.covered_count, 0)) },
+    { title: "작성자 수", value: String(distinctPresenterCount) },
     {
-      title: "Top Conversion",
-      value: data.summary.topSessionByConversion
-        ? `${data.summary.topSessionByConversion.industry_name} · ${data.summary.topSessionByConversion.converted_count}`
+      title: "종목이 가장 많은 글",
+      value: sessionWithMostCompanies
+        ? `${sessionWithMostCompanies.industry_name} · ${sessionWithMostCompanies.covered_count}`
         : "-",
     },
   ];
@@ -370,17 +358,15 @@ export function StudySessionsBoard({ data }: { data: StudySessionData }) {
       <section className="panel p-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h2 className="text-base font-semibold text-slate-900">Industry Sessions</h2>
-            <p className="mt-1 text-sm text-slate-600">
-              세션은 리서치 자산이고, 여기서 언급된 종목은 기본적으로 성과판 평가 대상이 아닙니다.
-            </p>
+            <h2 className="text-base font-semibold text-slate-900">자유 종목 목록</h2>
+            <p className="mt-1 text-sm text-slate-600">자유롭게 종목 의견과 메모를 쌓아 두는 공간입니다.</p>
           </div>
           <button
             type="button"
             onClick={openCreateSession}
             className="rounded-lg bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800"
           >
-            새 산업 발표
+            새 의견 등록
           </button>
         </div>
         {message && <div className="mt-3 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{message}</div>}
@@ -392,15 +378,7 @@ export function StudySessionsBoard({ data }: { data: StudySessionData }) {
           <table className="min-w-full text-sm">
             <thead className="bg-slate-50 text-left text-slate-600">
               <tr>
-                {[
-                  "Presented",
-                  "Presenter",
-                  "Industry",
-                  "Summary",
-                  "Covered",
-                  "Converted",
-                  "Adoption",
-                ].map((heading) => (
+                {["작성일", "작성자", "주제", "요약", "등록 종목 수"].map((heading) => (
                   <th key={heading} className="px-3 py-3 font-semibold">
                     {heading}
                   </th>
@@ -422,14 +400,12 @@ export function StudySessionsBoard({ data }: { data: StudySessionData }) {
                   </td>
                   <td className="max-w-[360px] px-3 py-3 text-xs text-slate-600">{summarize(session.thesis)}</td>
                   <td className="px-3 py-3 text-slate-700">{session.covered_count}</td>
-                  <td className="px-3 py-3 text-slate-700">{session.converted_count}</td>
-                  <td className="px-3 py-3 text-slate-700">{session.adoption_count}</td>
                 </tr>
               ))}
               {sessions.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="px-3 py-10 text-center text-slate-500">
-                    No sessions yet.
+                  <td colSpan={5} className="px-3 py-10 text-center text-slate-500">
+                    아직 등록된 자유 종목이 없습니다.
                   </td>
                 </tr>
               )}
@@ -446,9 +422,9 @@ export function StudySessionsBoard({ data }: { data: StudySessionData }) {
           >
             <div className="flex items-start justify-between gap-4">
               <div>
-                <div className="text-xs uppercase tracking-[0.18em] text-slate-500">Study Session</div>
+                <div className="text-xs uppercase tracking-[0.18em] text-slate-500">자유 종목</div>
                 <h3 className="mt-2 text-2xl font-semibold text-slate-900">
-                  {creatingSession ? "New Session" : selectedSession?.industry_name}
+                  {creatingSession ? "새 자유 종목" : selectedSession?.industry_name}
                 </h3>
                 {!creatingSession && selectedSession?.title && (
                   <div className="mt-1 text-sm text-slate-500">{selectedSession.title}</div>
@@ -463,13 +439,13 @@ export function StudySessionsBoard({ data }: { data: StudySessionData }) {
                 }}
                 className="rounded-lg border border-slate-300 px-3 py-2 text-sm hover:bg-slate-50"
               >
-                Close
+                닫기
               </button>
             </div>
 
             <div className="mt-5 grid grid-cols-1 gap-3 md:grid-cols-2">
               <label className="text-sm">
-                <div className="mb-1 text-slate-600">Presented At</div>
+                <div className="mb-1 text-slate-600">작성일</div>
                 <input
                   type="date"
                   value={sessionDraft.presented_at}
@@ -478,7 +454,7 @@ export function StudySessionsBoard({ data }: { data: StudySessionData }) {
                 />
               </label>
               <label className="text-sm">
-                <div className="mb-1 text-slate-600">Presenter</div>
+                <div className="mb-1 text-slate-600">작성자</div>
                 <input
                   list="session-presenters"
                   value={sessionDraft.presenter}
@@ -492,7 +468,7 @@ export function StudySessionsBoard({ data }: { data: StudySessionData }) {
                 </datalist>
               </label>
               <label className="text-sm">
-                <div className="mb-1 text-slate-600">Industry</div>
+                <div className="mb-1 text-slate-600">주제/분류</div>
                 <input
                   value={sessionDraft.industry_name}
                   onChange={(e) => setSessionDraft((prev) => ({ ...prev, industry_name: e.target.value }))}
@@ -500,7 +476,7 @@ export function StudySessionsBoard({ data }: { data: StudySessionData }) {
                 />
               </label>
               <label className="text-sm">
-                <div className="mb-1 text-slate-600">Title</div>
+                <div className="mb-1 text-slate-600">제목</div>
                 <input
                   value={sessionDraft.title}
                   onChange={(e) => setSessionDraft((prev) => ({ ...prev, title: e.target.value }))}
@@ -508,7 +484,7 @@ export function StudySessionsBoard({ data }: { data: StudySessionData }) {
                 />
               </label>
               <label className="text-sm md:col-span-2">
-                <div className="mb-1 text-slate-600">Thesis</div>
+                <div className="mb-1 text-slate-600">핵심 의견</div>
                 <textarea
                   rows={4}
                   value={sessionDraft.thesis}
@@ -517,7 +493,7 @@ export function StudySessionsBoard({ data }: { data: StudySessionData }) {
                 />
               </label>
               <label className="text-sm md:col-span-2">
-                <div className="mb-1 text-slate-600">Anti-Thesis</div>
+                <div className="mb-1 text-slate-600">반대 의견</div>
                 <textarea
                   rows={3}
                   value={sessionDraft.anti_thesis}
@@ -526,7 +502,7 @@ export function StudySessionsBoard({ data }: { data: StudySessionData }) {
                 />
               </label>
               <label className="text-sm md:col-span-2">
-                <div className="mb-1 text-slate-600">Notes</div>
+                <div className="mb-1 text-slate-600">메모</div>
                 <textarea
                   rows={3}
                   value={sessionDraft.note}
@@ -543,7 +519,7 @@ export function StudySessionsBoard({ data }: { data: StudySessionData }) {
                 disabled={isSavingSession}
                 className="rounded-lg bg-slate-900 px-3 py-2 text-sm font-medium text-white disabled:bg-slate-400"
               >
-                {isSavingSession ? "Saving..." : creatingSession ? "Create Session" : "Save Session"}
+                {isSavingSession ? "저장 중..." : creatingSession ? "등록하기" : "저장하기"}
               </button>
             </div>
 
@@ -551,17 +527,15 @@ export function StudySessionsBoard({ data }: { data: StudySessionData }) {
               <section className="mt-6 rounded-2xl border border-slate-200 p-4">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
-                    <div className="text-sm font-semibold text-slate-900">Covered Companies</div>
-                    <div className="mt-1 text-xs text-slate-500">
-                      여기 종목들은 coverage일 뿐이고, 기본적으로 성과판 랭킹 대상이 아닙니다.
-                    </div>
+                    <div className="text-sm font-semibold text-slate-900">관련 종목</div>
+                    <div className="mt-1 text-xs text-slate-500">여기 종목들은 자유 의견에 연결된 참고 종목입니다.</div>
                   </div>
-                  <div className="text-sm text-slate-500">{selectedSession.covered_count} companies</div>
+                  <div className="text-sm text-slate-500">{selectedSession.covered_count}개 종목</div>
                 </div>
 
                 <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
                   <label className="text-sm">
-                    <div className="mb-1 text-slate-600">Company</div>
+                    <div className="mb-1 text-slate-600">종목명</div>
                     <input
                       value={companyDraft.company_name}
                       onChange={(e) => setCompanyDraft((prev) => ({ ...prev, company_name: e.target.value }))}
@@ -569,7 +543,7 @@ export function StudySessionsBoard({ data }: { data: StudySessionData }) {
                     />
                   </label>
                   <label className="text-sm">
-                    <div className="mb-1 text-slate-600">Ticker</div>
+                    <div className="mb-1 text-slate-600">티커</div>
                     <input
                       value={companyDraft.ticker}
                       onChange={(e) => setCompanyDraft((prev) => ({ ...prev, ticker: e.target.value }))}
@@ -577,7 +551,7 @@ export function StudySessionsBoard({ data }: { data: StudySessionData }) {
                     />
                   </label>
                   <label className="text-sm">
-                    <div className="mb-1 text-slate-600">Sector</div>
+                    <div className="mb-1 text-slate-600">섹터</div>
                     <input
                       value={companyDraft.sector}
                       onChange={(e) => setCompanyDraft((prev) => ({ ...prev, sector: e.target.value }))}
@@ -585,7 +559,7 @@ export function StudySessionsBoard({ data }: { data: StudySessionData }) {
                     />
                   </label>
                   <label className="text-sm">
-                    <div className="mb-1 text-slate-600">Session Stance</div>
+                    <div className="mb-1 text-slate-600">기본 관점</div>
                     <select
                       value={companyDraft.session_stance}
                       onChange={(e) => setCompanyDraft((prev) => ({ ...prev, session_stance: e.target.value as StudySessionStance }))}
@@ -599,7 +573,7 @@ export function StudySessionsBoard({ data }: { data: StudySessionData }) {
                     </select>
                   </label>
                   <label className="text-sm">
-                    <div className="mb-1 text-slate-600">Follow-up</div>
+                    <div className="mb-1 text-slate-600">정리 상태</div>
                     <select
                       value={companyDraft.follow_up_status}
                       onChange={(e) =>
@@ -618,7 +592,7 @@ export function StudySessionsBoard({ data }: { data: StudySessionData }) {
                     </select>
                   </label>
                   <label className="text-sm">
-                    <div className="mb-1 text-slate-600">Next Event</div>
+                    <div className="mb-1 text-slate-600">다음 이벤트</div>
                     <input
                       type="date"
                       value={companyDraft.next_event_date}
@@ -627,7 +601,7 @@ export function StudySessionsBoard({ data }: { data: StudySessionData }) {
                     />
                   </label>
                   <label className="text-sm md:col-span-2 xl:col-span-3">
-                    <div className="mb-1 text-slate-600">Mention Reason</div>
+                    <div className="mb-1 text-slate-600">의견 요약</div>
                     <textarea
                       rows={2}
                       value={companyDraft.mention_reason}
@@ -636,7 +610,7 @@ export function StudySessionsBoard({ data }: { data: StudySessionData }) {
                     />
                   </label>
                   <label className="text-sm md:col-span-2 xl:col-span-3">
-                    <div className="mb-1 text-slate-600">Note</div>
+                    <div className="mb-1 text-slate-600">메모</div>
                     <textarea
                       rows={2}
                       value={companyDraft.note}
@@ -653,7 +627,7 @@ export function StudySessionsBoard({ data }: { data: StudySessionData }) {
                     disabled={isSavingCompany}
                     className="rounded-lg border border-slate-300 px-3 py-2 text-sm hover:bg-slate-50 disabled:opacity-50"
                   >
-                    {isSavingCompany ? "Saving..." : editingCompanyId === null ? "Add Covered Company" : "Save Company"}
+                    {isSavingCompany ? "저장 중..." : editingCompanyId === null ? "관련 종목 추가" : "종목 저장"}
                   </button>
                   {editingCompanyId !== null && (
                     <button
@@ -661,14 +635,14 @@ export function StudySessionsBoard({ data }: { data: StudySessionData }) {
                       onClick={resetCompanyEditor}
                       className="rounded-lg border border-slate-300 px-3 py-2 text-sm hover:bg-slate-50"
                     >
-                      Cancel Edit
+                      편집 취소
                     </button>
                   )}
                 </div>
 
                 <div className="mt-5 space-y-3">
                   {selectedSession.companies.length === 0 ? (
-                    <div className="text-sm text-slate-500">No covered companies yet.</div>
+                    <div className="text-sm text-slate-500">아직 등록된 관련 종목이 없습니다.</div>
                   ) : (
                     selectedSession.companies.map((company) => (
                       <div key={company.id} className="rounded-xl border border-slate-200 p-4 text-sm">
@@ -678,20 +652,12 @@ export function StudySessionsBoard({ data }: { data: StudySessionData }) {
                               {company.company_name} <span className="text-slate-500">({company.ticker})</span>
                             </div>
                             <div className="mt-1 flex flex-wrap gap-2 text-xs text-slate-500">
-                              <span>stance: {company.session_stance}</span>
-                              <span>follow-up: {company.follow_up_status}</span>
-                              {company.next_event_date && <span>next event: {company.next_event_date}</span>}
-                              <span>converted calls: {company.converted_call_count}</span>
+                              <span>기본 관점: {company.session_stance}</span>
+                              <span>정리 상태: {company.follow_up_status}</span>
+                              {company.next_event_date && <span>다음 이벤트: {company.next_event_date}</span>}
                             </div>
                           </div>
                           <div className="flex flex-wrap gap-2">
-                            <button
-                              type="button"
-                              onClick={() => createActionableCall(selectedSession, company)}
-                              className="rounded-lg bg-slate-900 px-3 py-2 text-xs font-medium text-white hover:bg-slate-800"
-                            >
-                              Create Actionable Call
-                            </button>
                             <button
                               type="button"
                               onClick={() => {
@@ -700,7 +666,7 @@ export function StudySessionsBoard({ data }: { data: StudySessionData }) {
                               }}
                               className="rounded-lg border border-slate-300 px-3 py-2 text-xs hover:bg-slate-50"
                             >
-                              Edit
+                              수정
                             </button>
                             <button
                               type="button"
@@ -708,17 +674,17 @@ export function StudySessionsBoard({ data }: { data: StudySessionData }) {
                               disabled={busyCompanyId === company.id}
                               className="rounded-lg border border-rose-200 px-3 py-2 text-xs text-rose-700 hover:bg-rose-50 disabled:opacity-50"
                             >
-                              Delete
+                              삭제
                             </button>
                           </div>
                         </div>
                         <div className="mt-3 grid gap-3 md:grid-cols-2">
                           <div>
-                            <div className="text-xs uppercase tracking-[0.18em] text-slate-500">Reason</div>
+                            <div className="text-xs uppercase tracking-[0.18em] text-slate-500">의견 요약</div>
                             <div className="mt-2 whitespace-pre-wrap text-slate-700">{company.mention_reason ?? "-"}</div>
                           </div>
                           <div>
-                            <div className="text-xs uppercase tracking-[0.18em] text-slate-500">Note</div>
+                            <div className="text-xs uppercase tracking-[0.18em] text-slate-500">메모</div>
                             <div className="mt-2 whitespace-pre-wrap text-slate-700">{company.note ?? "-"}</div>
                           </div>
                         </div>

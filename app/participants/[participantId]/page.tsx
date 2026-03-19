@@ -25,15 +25,18 @@ export default async function ParticipantDetailPage({
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <Link href="/" className="text-sm text-slate-500 hover:underline">
-              Back to Leaderboard
+              홈으로 돌아가기
             </Link>
             <h1 className="mt-2 text-2xl font-semibold">{data.participant.name}</h1>
+            <p className="mt-2 text-sm text-slate-600">
+              아래에서 거래를 입력하고, 보유 종목과 성과를 확인할 수 있습니다.
+            </p>
           </div>
           <Link
             href={`/api/participants/${data.participant.id}/export`}
             className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium hover:bg-slate-50"
           >
-            Export CSV (Trades + Snapshots)
+            거래/스냅샷 내려받기
           </Link>
         </div>
       </header>

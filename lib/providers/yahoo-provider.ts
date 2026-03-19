@@ -3,6 +3,14 @@ import type { DailyClosePoint, MarketDataProvider } from "@/lib/providers/types"
 
 const BASE_URL = "https://query1.finance.yahoo.com/v8/finance/chart";
 const RETRY_DELAYS_MS = [300, 900];
+const REQUEST_HEADERS = {
+  "User-Agent":
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+    "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+  Accept: "application/json,text/plain,*/*",
+  "Accept-Language": "en-US,en;q=0.9",
+  Referer: "https://finance.yahoo.com/",
+};
 
 function isTransientFetchError(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
@@ -72,8 +80,12 @@ async function fetchChart(symbol: string, targetDate: string) {
       const res = await fetch(url, {
         cache: "no-store",
         signal: AbortSignal.timeout(15_000),
+        headers: REQUEST_HEADERS,
       });
       if (!res.ok) {
+        if (res.status === 429) {
+          throw new Error(`[Yahoo] Rate limited for ${symbol}`);
+        }
         return null;
       }
       return (await res.json()) as Record<string, unknown>;
