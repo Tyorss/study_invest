@@ -1,8 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { DrawdownChart } from "@/components/drawdown-chart";
 import { HoldingsTable } from "@/components/holdings-table";
-import { IndexedNavChart } from "@/components/indexed-nav-chart";
+import { ParticipantPerformanceCharts } from "@/components/participant-performance-charts";
 import { ParticipantHeader } from "@/components/participant-header";
 import { ParticipantNotesEditor } from "@/components/participant-notes-editor";
 import { TradeEntryForm } from "@/components/trade-entry-form";
@@ -18,6 +17,11 @@ export default async function ParticipantDetailPage({
 }) {
   const data = await fetchParticipantDetail(params.participantId);
   if (!data) notFound();
+  const firstTradeDate =
+    data.trades
+      .map((trade) => String(trade.trade_date))
+      .sort((a, b) => a.localeCompare(b))
+      .at(0) ?? null;
 
   return (
     <main className="space-y-5">
@@ -53,10 +57,10 @@ export default async function ParticipantDetailPage({
       <HoldingsTable rows={data.holdings} />
       <TradesTable rows={data.trades} />
 
-      <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-        <IndexedNavChart data={data.chartSeries} />
-        <DrawdownChart data={data.chartSeries} />
-      </div>
+      <ParticipantPerformanceCharts
+        firstTradeDate={firstTradeDate}
+        participantId={data.participant.id}
+      />
     </main>
   );
 }

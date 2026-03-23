@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { ManualJobsPanel } from "@/components/manual-jobs-panel";
-import { todayInSeoul, yesterdayInSeoul } from "@/lib/time";
+import { todayInSeoul } from "@/lib/time";
 
 export const dynamic = "force-dynamic";
 
@@ -20,7 +20,7 @@ export default function AdminJobsPage() {
       </header>
 
       <ManualJobsPanel
-        defaultDailyDate={yesterdayInSeoul()}
+        defaultDailyDate={todayInSeoul()}
         defaultSnapshotDate={todayInSeoul()}
       />
     </main>

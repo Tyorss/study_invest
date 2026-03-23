@@ -476,7 +476,7 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
   const [composerOpen, setComposerOpen] = useState(false);
   const [draft, setDraft] = useState<Draft>(emptyDraft(initialComposer));
   const [isSaving, setIsSaving] = useState(false);
-  const [isRefreshingQuotes, setIsRefreshingQuotes] = useState(false);
+  const [, setIsRefreshingQuotes] = useState(false);
   const [busyId, setBusyId] = useState<number | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -1390,17 +1390,7 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
             </select>
           </label>
         </div>
-        <div className="mt-3 flex flex-wrap items-center justify-between gap-3 text-sm text-slate-500">
-          <div>헤더를 클릭하면 오름차순/내림차순 정렬이 됩니다.</div>
-          <button
-            type="button"
-            onClick={() => refreshIdeas(sortedIdeas, `${sortedIdeas.length}개 콜의 현재가를 다시 불러왔습니다.`)}
-            disabled={isRefreshingQuotes || sortedIdeas.length === 0}
-            className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {isRefreshingQuotes ? "불러오는 중..." : "현재가 일괄 새로고침"}
-          </button>
-        </div>
+        <div className="mt-3 text-sm text-slate-500">헤더를 클릭하면 오름차순/내림차순 정렬이 됩니다.</div>
       </section>
 
       <section className="panel overflow-hidden">

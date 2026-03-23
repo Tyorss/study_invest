@@ -269,18 +269,33 @@ async function resolveInstrumentId(
   const market = body.market as Market;
   const symbol = normalizeSymbol(body.symbol as string, market);
   const tradeDate = body.trade_date as string;
+  const providerSymbol = defaultProviderSymbol(symbol, market);
 
   const { data: existing, error: existingError } = await supabase
     .from("instruments")
-    .select("id")
+    .select("id, name, provider_symbol, market")
     .eq("symbol", symbol)
+    .eq("market", market)
     .maybeSingle();
   if (existingError) throw existingError;
   if (existing?.id) {
+    const nextName = body.instrument_name?.trim();
+    const patch: Record<string, string> = {};
+    if (nextName && nextName !== existing.name) {
+      patch.name = nextName;
+    }
+    if (providerSymbol && providerSymbol !== existing.provider_symbol) {
+      patch.provider_symbol = providerSymbol;
+    }
+    if (Object.keys(patch).length > 0) {
+      const { error: updateError } = await supabase
+        .from("instruments")
+        .update(patch)
+        .eq("id", existing.id);
+      if (updateError) throw updateError;
+    }
     return { instrumentId: String(existing.id), created: false, warnings };
   }
-
-  const providerSymbol = defaultProviderSymbol(symbol, market);
   const lookup = await validateSymbolWithProviders({
     symbol,
     market,

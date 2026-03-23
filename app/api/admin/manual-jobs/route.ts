@@ -1,7 +1,7 @@
 import { timingSafeEqual } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { generateSnapshotsForDate, runDailyPipeline } from "@/lib/jobs/runner";
-import { todayInSeoul, yesterdayInSeoul } from "@/lib/time";
+import { todayInSeoul } from "@/lib/time";
 
 export const runtime = "nodejs";
 
@@ -51,8 +51,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Invalid job type" }, { status: 400 });
   }
 
-  const targetDate =
-    body?.date?.trim() || (job === "run-daily" ? yesterdayInSeoul() : todayInSeoul());
+  const targetDate = body?.date?.trim() || todayInSeoul();
   if (!isValidDate(targetDate)) {
     return NextResponse.json({ error: "date must be YYYY-MM-DD" }, { status: 400 });
   }

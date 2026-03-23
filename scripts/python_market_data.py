@@ -19,7 +19,7 @@ add_local_package_path()
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--backend", required=True, choices=["yfinance", "fdr"])
-    parser.add_argument("--mode", required=True, choices=["close", "fx"])
+    parser.add_argument("--mode", required=True, choices=["close", "fx", "name"])
     parser.add_argument("--symbol")
     parser.add_argument("--market")
     parser.add_argument("--date", required=True)
@@ -179,6 +179,54 @@ def load_fdr_fx(date_str: str):
         return {"error": f"[FinanceDataReader] {exc}"}
 
 
+def load_fdr_name(symbol: str, market: str, provider_symbol: str):
+    if market != "KR":
+        return {"error": f"[FinanceDataReader] instrument name lookup is unsupported for market {market}"}
+
+    fdr = load_fdr()
+    candidates = fdr_candidates(symbol, market, provider_symbol)
+    listing_targets = ["KRX", "ETF/KR"]
+    symbol_columns = ["Symbol", "Code", "ISU_CD", "종목코드", "단축코드"]
+    name_columns = ["Name", "종목명", "한글종목명"]
+
+    try:
+        seen_errors = []
+        for target in listing_targets:
+            try:
+                listing = fdr.StockListing(target)
+                if listing is None or getattr(listing, "empty", True):
+                    seen_errors.append(f"{target} listing is empty")
+                    continue
+
+                listing = listing.fillna("")
+                symbol_col = next((col for col in symbol_columns if col in listing.columns), None)
+                name_col = next((col for col in name_columns if col in listing.columns), None)
+                if not symbol_col or not name_col:
+                    seen_errors.append(
+                        f"{target} listing schema is missing symbol/name columns ({', '.join(listing.columns)})"
+                    )
+                    continue
+
+                for candidate in candidates:
+                    subset = listing[listing[symbol_col].astype(str) == str(candidate)]
+                    if subset.empty:
+                        continue
+                    row = subset.iloc[0]
+                    name = str(row[name_col]).strip()
+                    if name:
+                        return {"name": name}
+            except Exception as exc:  # pragma: no cover
+                seen_errors.append(f"{target}: {exc}")
+
+        if seen_errors:
+            return {
+                "error": f"[FinanceDataReader] no instrument name for {symbol} ({' | '.join(seen_errors)})"
+            }
+        return {"error": f"[FinanceDataReader] no instrument name for {symbol}"}
+    except Exception as exc:  # pragma: no cover
+        return {"error": f"[FinanceDataReader] {exc}"}
+
+
 def main():
     args = parse_args()
     if args.mode == "close":
@@ -190,10 +238,18 @@ def main():
         else:
             result = load_fdr_close(args.symbol, args.market, args.date, args.provider_symbol or "")
     else:
-        if args.backend == "yfinance":
-            result = load_yfinance_fx(args.date)
+        if args.mode == "fx":
+            if args.backend == "yfinance":
+                result = load_yfinance_fx(args.date)
+            else:
+                result = load_fdr_fx(args.date)
         else:
-            result = load_fdr_fx(args.date)
+            if not args.symbol or not args.market:
+                result = {"error": "symbol and market are required for name mode"}
+            elif args.backend == "fdr":
+                result = load_fdr_name(args.symbol, args.market, args.provider_symbol or "")
+            else:
+                result = {"error": f"[yfinance] instrument name lookup is unsupported"}
 
     print(json.dumps(result))
 

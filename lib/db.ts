@@ -461,6 +461,19 @@ export async function getInstrumentBySymbolMarket(symbol: string, market: Instru
   return (data as Instrument | null) ?? null;
 }
 
+export async function updateInstrumentMetadata(
+  instrumentId: string,
+  patch: Partial<Pick<Instrument, "name" | "provider_symbol">>,
+) {
+  if (Object.keys(patch).length === 0) return;
+  const supabase = getAdminSupabase();
+  const { error } = await supabase
+    .from("instruments")
+    .update(patch)
+    .eq("id", instrumentId);
+  if (error) throw error;
+}
+
 export async function getFxSeries(fromDate: string, toDate: string) {
   const supabase = getAdminSupabase();
   const { data, error } = await supabase

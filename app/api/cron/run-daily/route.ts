@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isAuthorizedCron } from "@/lib/cron-auth";
 import { runDailyPipeline } from "@/lib/jobs/runner";
-import { yesterdayInSeoul } from "@/lib/time";
+import { todayInSeoul } from "@/lib/time";
 
 export const runtime = "nodejs";
 
@@ -10,7 +10,7 @@ async function handle(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
   try {
-    const targetDate = req.nextUrl.searchParams.get("date") ?? yesterdayInSeoul();
+    const targetDate = req.nextUrl.searchParams.get("date") ?? todayInSeoul();
     const result = await runDailyPipeline(targetDate);
     return NextResponse.json({ ok: true, ...result });
   } catch (err) {

@@ -1,4 +1,5 @@
 import { resolveMarketDataProviders } from "@/lib/providers";
+import { fetchBestClosePointFromProviderChain } from "@/lib/market-data";
 import { todayInSeoul } from "@/lib/time";
 import type { Currency, Market } from "@/types/db";
 import type { DailyClosePoint } from "@/lib/providers/types";
@@ -112,54 +113,13 @@ async function fetchClosePointOnOrBefore(input: {
     };
   }
 
-  const reasons: string[] = [];
-  let availableProviders = 0;
+  const live = await fetchBestClosePointFromProviderChain(resolved.handles, input);
 
-  for (const handle of resolved.handles) {
-    if (!handle.provider) {
-      if (handle.initError) reasons.push(handle.initError);
-      continue;
-    }
-    availableProviders += 1;
-
-    try {
-      const point =
-        typeof handle.provider.getDailyClosePoint === "function"
-          ? await handle.provider.getDailyClosePoint(
-              input.symbol,
-              input.market,
-              input.date,
-              input.providerSymbol,
-            )
-          : null;
-      if (point !== null && Number.isFinite(point.close)) {
-        return { point, warning: null };
-      }
-      if (point === null) {
-        const close = await handle.provider.getDailyClose(
-          input.symbol,
-          input.market,
-          input.date,
-          input.providerSymbol,
-        );
-        if (close !== null && Number.isFinite(close)) {
-          return {
-            point: {
-              date: input.date,
-              close,
-            },
-            warning: null,
-          };
-        }
-      }
-      reasons.push(`[${handle.requestedProvider}] No close price returned`);
-    } catch (err) {
-      reasons.push(
-        `[${handle.requestedProvider}] ${err instanceof Error ? err.message : "Unknown quote error"}`,
-      );
-    }
+  if (live.point !== null) {
+    return { point: live.point, warning: null };
   }
 
+  const availableProviders = resolved.handles.filter((handle) => handle.provider !== null).length;
   if (availableProviders === 0) {
     return {
       point: null,
@@ -171,8 +131,11 @@ async function fetchClosePointOnOrBefore(input: {
   return {
     point: null,
     warning:
-      reasons.length > 0
-        ? `Current price auto-update failed. ${reasons.join(" | ")}`
+      live.attempts.length > 0
+        ? `Current price auto-update failed. ${live.attempts
+            .filter((attempt) => attempt.reason)
+            .map((attempt) => `[${attempt.provider}] ${attempt.reason}`)
+            .join(" | ")}`
         : "Current price auto-update failed.",
   };
 }

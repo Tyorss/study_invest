@@ -11,6 +11,13 @@ type JobResult = {
     rows?: number;
     failures?: Array<unknown>;
   };
+  benchmarks?: {
+    status?: string;
+    startDate?: string;
+    rows?: number;
+    failures?: Array<unknown>;
+    warnings?: Array<unknown>;
+  };
   fx?: {
     status?: string;
     rate?: number | null;
@@ -68,6 +75,7 @@ function buildSummary(job: JobName, targetDate: string, result: JobResult | unde
 
   if (job === "run-daily") {
     const prices = result.prices;
+    const benchmarks = result.benchmarks;
     const fx = result.fx;
     const snapshots = result.snapshots;
     const studyTracker = result.studyTracker;
@@ -75,6 +83,10 @@ function buildSummary(job: JobName, targetDate: string, result: JobResult | unde
     return [
       `${targetDate} 기준 일일 업데이트를 실행했습니다.`,
       prices?.rows !== undefined ? `가격 ${prices.rows}건 처리` : null,
+      benchmarks?.rows !== undefined
+        ? `벤치마크 ${benchmarks.rows}건 보강`
+        : null,
+      benchmarks?.startDate ? `${benchmarks.startDate}부터 확인` : null,
       fx?.status ? `환율 ${fx.status}` : null,
       snapshots?.successCount !== undefined ? `스냅샷 ${snapshots.successCount}명 반영` : null,
       studyTracker?.refreshedCount !== undefined

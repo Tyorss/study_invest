@@ -543,6 +543,7 @@ export function TradeEntryForm({ portfolioId, studyCallOptions }: Props) {
             onChange={(e) => {
               const next = e.target.value;
               setSymbol(next);
+              setInstrumentName("");
               const inferred = inferMarketFromSymbol(next);
               if (inferred) {
                 setMarket(inferred);
@@ -646,7 +647,10 @@ export function TradeEntryForm({ portfolioId, studyCallOptions }: Props) {
               <div className="mb-1 text-slate-600">시장 구분</div>
               <select
                 value={market}
-                onChange={(e) => setMarket(e.target.value as Market)}
+                onChange={(e) => {
+                  setMarket(e.target.value as Market);
+                  setInstrumentName("");
+                }}
                 className="w-full rounded-lg border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
               >
                 <option value="KR">국내</option>

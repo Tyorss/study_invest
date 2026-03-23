@@ -3,28 +3,42 @@ import {
   getBenchmarkByCode,
   getLatestJobRuns,
   getParticipantNotes,
+  getParticipantById,
   getStudySessionCompanies,
   getStudyTrackerIdeas,
   getBenchmarkPriceSeries,
   getParticipantsWithPortfolios,
   getGameStartDate,
-  getParticipantById,
   getParticipantLatestSnapshot,
   getLatestTradeDateForPortfolio,
   getParticipantSnapshots,
   getTradesForPortfolio,
+  getPricePointOnOrBefore,
   getPriceOnOrBefore,
   getTradesJournal,
   getFxOnOrBefore,
+  updateInstrumentMetadata,
+  upsertPrice,
 } from "@/lib/db";
 import { createValueCache, rebuildPortfolioState } from "@/lib/engine/snapshot";
-import { addDays } from "@/lib/time";
+import {
+  fetchBestClosePointFromProviderChain,
+  isExactPricePoint,
+  pickPreferredClosePoint,
+} from "@/lib/market-data";
+import { resolveMarketDataProviders } from "@/lib/providers";
+import { lookupInstrumentNameWithPython } from "@/lib/providers/python-market-data-provider";
+import { addDays, dateRange } from "@/lib/time";
 import type {
+  Instrument,
   LeaderboardInstrumentsRow,
   LeaderboardRow,
   Market,
   MissingPriceHoldingRow,
+  Participant,
+  Portfolio,
   RankedInstrumentStat,
+  TradeRow,
 } from "@/types/db";
 
 function toNumOrNull(value: unknown): number | null {
@@ -53,6 +67,265 @@ function resolveUsableMarkPrice(price: number | null, fallback: number) {
     return { value: fallback, isFallback: true };
   }
   return { value: price as number, isFallback: false };
+}
+
+function defaultProviderSymbol(symbol: string, market: Market) {
+  if (market === "KR") return `${symbol}:KRX`;
+  if (market === "INDEX" && symbol === "KS11") return "KOSPI";
+  return symbol;
+}
+
+function benchmarkHistorySeedStart(endDate: string) {
+  return `${String(Number(endDate.slice(0, 4)) - 1)}-10-01`;
+}
+
+async function getUsableInstrumentPricePoint(
+  instrument: Instrument,
+  date: string,
+): Promise<{ close: number | null; isFallback: boolean; refreshed: boolean }> {
+  const storedPoint = await getPricePointOnOrBefore(instrument.id, date);
+  if (isExactPricePoint(storedPoint, date) && Number(storedPoint?.close ?? 0) > 0) {
+    return { close: Number(storedPoint!.close), isFallback: false, refreshed: false };
+  }
+
+  let livePoint:
+    | {
+        date: string;
+        close: number;
+        source?: string | null;
+      }
+    | null = null;
+
+  try {
+    const providerResolution = resolveMarketDataProviders();
+    const live = await fetchBestClosePointFromProviderChain(providerResolution.handles, {
+      symbol: instrument.symbol,
+      market: instrument.market,
+      date,
+      providerSymbol: instrument.provider_symbol ?? defaultProviderSymbol(instrument.symbol, instrument.market),
+    });
+    if (live.point && Number.isFinite(live.point.close) && live.point.close > 0) {
+      livePoint = {
+        date: live.point.date,
+        close: live.point.close,
+        source: "provider",
+      };
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Unknown provider resolution error";
+    console.error(
+      `[participant-detail] single-price refresh failed for ${instrument.symbol} (${date}): ${message}`,
+    );
+  }
+
+  const preferredPoint = pickPreferredClosePoint(date, storedPoint, livePoint);
+  if (!preferredPoint || !Number.isFinite(preferredPoint.close) || preferredPoint.close <= 0) {
+    return { close: null, isFallback: true, refreshed: false };
+  }
+
+  const shouldPersist =
+    !storedPoint ||
+    preferredPoint.date > storedPoint.date ||
+    preferredPoint.close !== storedPoint.close ||
+    preferredPoint.source !== storedPoint.source;
+
+  if (shouldPersist) {
+    await upsertPrice([
+      {
+        instrument_id: instrument.id,
+        date,
+        close: String(preferredPoint.close),
+        source:
+          preferredPoint.date === date
+            ? preferredPoint.source ?? "provider"
+            : "carry_forward",
+      },
+    ]);
+  }
+
+  return {
+    close: preferredPoint.close,
+    isFallback: preferredPoint.date !== date,
+    refreshed: shouldPersist,
+  };
+}
+
+async function resolveCanonicalKrInstrumentName(instrument: Instrument): Promise<string | null> {
+  if (instrument.market !== "KR" || !/^\d{6}$/.test(instrument.symbol)) {
+    return null;
+  }
+
+  try {
+    const name = await lookupInstrumentNameWithPython(
+      "fdr",
+      instrument.symbol,
+      instrument.market,
+      instrument.provider_symbol ?? defaultProviderSymbol(instrument.symbol, instrument.market),
+    );
+    return name?.trim() || null;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Unknown instrument name lookup error";
+    console.error(
+      `[instrument-name] failed to resolve ${instrument.symbol}: ${message}`,
+    );
+    return null;
+  }
+}
+
+function isSuspiciousKrInstrumentName(instrument: Instrument) {
+  if (instrument.market !== "KR" || !/^\d{6}$/.test(instrument.symbol)) return false;
+  const name = instrument.name?.trim() ?? "";
+  if (!name) return true;
+  if (name === instrument.symbol) return true;
+  if (/[A-Za-z]/.test(name) && !/[가-힣]/.test(name)) return true;
+  return false;
+}
+
+async function repairKoreanInstrumentMetadata(instruments: Instrument[]) {
+  const unique = new Map<string, Instrument>();
+  for (const instrument of instruments) {
+    if (!isSuspiciousKrInstrumentName(instrument)) continue;
+    unique.set(instrument.id, instrument);
+  }
+
+  const repairedNames = new Map<string, string>();
+  for (const instrument of unique.values()) {
+    const canonicalName = await resolveCanonicalKrInstrumentName(instrument);
+    if (!canonicalName) continue;
+    repairedNames.set(instrument.id, canonicalName);
+    if (canonicalName !== instrument.name) {
+      await updateInstrumentMetadata(instrument.id, { name: canonicalName });
+    }
+  }
+
+  return repairedNames;
+}
+
+async function buildParticipantChartSeries(params: {
+  portfolio: Portfolio;
+  participant: Participant;
+  tradeRows: TradeRow[];
+  startDate: string;
+  endDate: string;
+}) {
+  const chartDates = dateRange(params.startDate, params.endDate).filter((date) => !isWeekend(date));
+  if (chartDates.length === 0) return [];
+
+  const cache = createValueCache();
+  const startingCash = Number(params.participant.starting_cash_krw);
+  const positions = new Map<
+    string,
+    {
+      instrument: Instrument;
+      quantity: number;
+      avg_cost_local: number;
+    }
+  >();
+
+  let tradeIndex = 0;
+  let cashKrw = startingCash;
+  let peak = Number.NEGATIVE_INFINITY;
+  const out: Array<{
+    date: string;
+    nav_indexed: number;
+    drawdown: number;
+  }> = [];
+
+  const orderedTrades = [...params.tradeRows].sort((a, b) => {
+    return (
+      a.trade_date.localeCompare(b.trade_date) ||
+      String(a.created_at).localeCompare(String(b.created_at)) ||
+      Number(a.id) - Number(b.id)
+    );
+  });
+
+  for (const date of chartDates) {
+    while (tradeIndex < orderedTrades.length && orderedTrades[tradeIndex].trade_date <= date) {
+      const trade = orderedTrades[tradeIndex];
+      tradeIndex += 1;
+
+      const instrument = trade.instruments;
+      const existing = positions.get(instrument.id);
+      const prevQty = existing?.quantity ?? 0;
+      let qty = Number(trade.quantity);
+      if (trade.side === "CLOSE") {
+        qty = prevQty;
+      }
+      if (!(qty > 0)) continue;
+
+      const px = Number(trade.price);
+      const feeRate = trade.fee_rate ? Number(trade.fee_rate) : 0;
+      const slippageBps = trade.slippage_bps ? Number(trade.slippage_bps) : 0;
+      const effectivePrice =
+        trade.side === "BUY"
+          ? px * (1 + slippageBps / 10_000)
+          : px * (1 - slippageBps / 10_000);
+      const notionalLocal = qty * effectivePrice;
+      const feeLocal = notionalLocal * feeRate;
+      const isUsd = instrument.currency === "USD";
+      const fx = isUsd ? await cache.fxOnOrBefore(trade.trade_date) : 1;
+      const fxRate = fx ?? 1;
+
+      if (trade.side === "BUY") {
+        cashKrw -= (notionalLocal + feeLocal) * fxRate;
+        const nextQty = prevQty + qty;
+        const prevCostLocal = (existing?.avg_cost_local ?? 0) * prevQty;
+        const avg = nextQty === 0 ? 0 : (prevCostLocal + notionalLocal + feeLocal) / nextQty;
+        positions.set(instrument.id, {
+          instrument,
+          quantity: nextQty,
+          avg_cost_local: avg,
+        });
+      } else {
+        cashKrw += (notionalLocal - feeLocal) * fxRate;
+        const avgCost = existing?.avg_cost_local ?? 0;
+        const nextQty = prevQty - qty;
+        if (nextQty <= 1e-9) {
+          positions.delete(instrument.id);
+        } else {
+          positions.set(instrument.id, {
+            instrument,
+            quantity: nextQty,
+            avg_cost_local: avgCost,
+          });
+        }
+      }
+    }
+
+    let holdingsValueKrw = 0;
+    for (const pos of positions.values()) {
+      const usablePoint = await getUsableInstrumentPricePoint(pos.instrument, date);
+      const mark = resolveUsableMarkPrice(usablePoint.close, pos.avg_cost_local).value;
+      const fx =
+        pos.instrument.currency === "USD"
+          ? await cache.fxOnOrBefore(date)
+          : 1;
+      const fxRate = fx ?? 1;
+      holdingsValueKrw += pos.quantity * mark * fxRate;
+    }
+
+    const nav = cashKrw + holdingsValueKrw;
+    if (nav > peak) peak = nav;
+
+    out.push({
+      date,
+      nav_indexed: startingCash === 0 ? 100 : (nav / startingCash) * 100,
+      drawdown: peak === 0 ? 0 : nav / peak - 1,
+    });
+  }
+
+  return out;
+}
+
+async function ensureBenchmarkRowsForDates(instrument: Instrument, dates: string[]) {
+  if (dates.length === 0) return false;
+
+  let refreshed = false;
+  for (const date of dates) {
+    const usablePoint = await getUsableInstrumentPricePoint(instrument, date);
+    if (usablePoint.refreshed) refreshed = true;
+  }
+  return refreshed;
 }
 
 async function computeTurnover20d(params: {
@@ -233,6 +506,36 @@ export async function fetchLeaderboard(sortBy: "return" | "sharpe" = "return") {
       }
 
       if (state) {
+        let refreshedExactPrice = false;
+        for (const position of state.positions) {
+          const usablePoint = await getUsableInstrumentPricePoint(
+            position.instrument,
+            valuationDate,
+          );
+          if (usablePoint.refreshed && usablePoint.close !== null && !usablePoint.isFallback) {
+            refreshedExactPrice = true;
+          }
+        }
+
+        if (refreshedExactPrice) {
+          try {
+            state = await rebuildPortfolioState(
+              portfolio,
+              participant,
+              valuationDate,
+              createValueCache(),
+            );
+            stateDate = valuationDate;
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : "Unknown refreshed valuation error";
+            console.error(
+              `[leaderboard] refreshed valuation failed for ${participant.id} (${valuationDate}): ${msg}`,
+            );
+          }
+        }
+      }
+
+      if (state) {
         navKrw = state.nav_krw;
         cashKrw = state.cash_krw;
         holdingsKrw = state.holdings_value_krw;
@@ -368,6 +671,13 @@ export async function fetchParticipantDetail(participantId: string) {
     getStudyTrackerIdeas(),
   ]);
   const notes = await getParticipantNotes(participantId);
+  const latestSnapshotDate = latestSnapshot?.date ? String(latestSnapshot.date) : null;
+  const latestTradeDate = tradeRows[0]?.trade_date ? String(tradeRows[0].trade_date) : null;
+  const valuationDate = [latestSnapshotDate, latestTradeDate]
+    .filter((x): x is string => Boolean(x))
+    .sort((a, b) => a.localeCompare(b))
+    .at(-1) ?? null;
+
   const studyCallOptions = studyIdeas.map((idea) => ({
     id: idea.id,
     label: [idea.ticker, idea.company_name, idea.presenter, idea.presented_at]
@@ -398,16 +708,10 @@ export async function fetchParticipantDetail(participantId: string) {
         : ideaMap.get(Number(trade.source_idea_id)) ?? null,
   }));
 
-  const latestSnapshotDate = latestSnapshot?.date ? String(latestSnapshot.date) : null;
-  const latestTradeDate = trades[0]?.trade_date ? String(trades[0].trade_date) : null;
-  const valuationDate = [latestSnapshotDate, latestTradeDate]
-    .filter((x): x is string => Boolean(x))
-    .sort((a, b) => a.localeCompare(b))
-    .at(-1) ?? null;
-
   const valuationCache = createValueCache();
   let resolvedValuationDate = valuationDate;
   let liveState: Awaited<ReturnType<typeof rebuildPortfolioState>> | null = null;
+  let repairedInstrumentNames = new Map<string, string>();
 
   if (resolvedValuationDate) {
     try {
@@ -444,14 +748,18 @@ export async function fetchParticipantDetail(participantId: string) {
     }
   }
 
+  if (liveState) {
+    repairedInstrumentNames = await repairKoreanInstrumentMetadata(
+      liveState.positions.map((position) => position.instrument),
+    );
+  }
+
   let holdings: any[] = [];
   if (resolvedValuationDate && liveState) {
     holdings = [];
     for (const p of liveState.positions) {
-      const resolvedMark = resolveUsableMarkPrice(
-        await valuationCache.priceOnOrBefore(p.instrument.id, resolvedValuationDate),
-        p.avg_cost_local,
-      );
+      const usablePoint = await getUsableInstrumentPricePoint(p.instrument, resolvedValuationDate);
+      const resolvedMark = resolveUsableMarkPrice(usablePoint.close, p.avg_cost_local);
       const close = resolvedMark.value;
       const fx =
         p.instrument.currency === "USD"
@@ -462,13 +770,13 @@ export async function fetchParticipantDetail(participantId: string) {
       const pnlKrw = (close - p.avg_cost_local) * p.quantity * fxRate;
       holdings.push({
         symbol: p.instrument.symbol,
-        name: p.instrument.name,
+        name: repairedInstrumentNames.get(p.instrument.id) ?? p.instrument.name,
         market: p.instrument.market,
         currency: p.instrument.currency,
         quantity: p.quantity,
         avg_cost_local: p.avg_cost_local,
         mark_local: close,
-        price_unavailable: resolvedMark.isFallback,
+        price_unavailable: usablePoint.close === null || resolvedMark.isFallback,
         value_krw: valueKrw,
         unrealized_pnl_krw: pnlKrw,
       });
@@ -491,6 +799,11 @@ export async function fetchParticipantDetail(participantId: string) {
   let kospiByDate: Record<string, number | null> = {};
   const benchmarkEndDate = resolvedValuationDate ?? latestSnapshotDate;
   if (benchmarkEndDate && spy && kospi) {
+    await Promise.all([
+      getUsableInstrumentPricePoint(spy, benchmarkEndDate),
+      getUsableInstrumentPricePoint(kospi, benchmarkEndDate),
+    ]);
+
     const [spyPrices, kospiPrices] = await Promise.all([
       getBenchmarkPriceSeries(spy.id, "1900-01-01", benchmarkEndDate),
       getBenchmarkPriceSeries(kospi.id, "1900-01-01", benchmarkEndDate),
@@ -508,28 +821,6 @@ export async function fetchParticipantDetail(participantId: string) {
       kospiPrices,
     ).returnByDate;
   }
-
-  const navBase = Number(pair.participant.starting_cash_krw);
-  let peak = Number.NEGATIVE_INFINITY;
-  const chartSeries = snapshots
-    .filter((s: any) => !isWeekend(String(s.date)))
-    .map((s: any) => {
-    const d = s.date as string;
-    const nav = Number(s.nav_krw);
-    if (nav > peak) peak = nav;
-    const drawdown = nav / peak - 1;
-    const indexedNav = navBase === 0 ? 100 : (nav / navBase) * 100;
-    const indexedSpy = spyByDate[d] === null || spyByDate[d] === undefined ? null : 100 * (1 + spyByDate[d]!);
-    const indexedKospi =
-      kospiByDate[d] === null || kospiByDate[d] === undefined ? null : 100 * (1 + kospiByDate[d]!);
-    return {
-      date: d,
-      nav_indexed: indexedNav,
-      spy_indexed: indexedSpy,
-      kospi_indexed: indexedKospi,
-      drawdown,
-    };
-    });
 
   let normalizedLatestSnapshot: any = null;
   if (resolvedValuationDate && liveState) {
@@ -626,7 +917,276 @@ export async function fetchParticipantDetail(participantId: string) {
       fee_rate: t.fee_rate === null ? null : Number(t.fee_rate),
       slippage_bps: t.slippage_bps === null ? null : Number(t.slippage_bps),
     })),
-    chartSeries,
+  };
+}
+
+export async function fetchParticipantPerformanceSeries(participantId: string) {
+  const pair = await getParticipantById(participantId);
+  if (!pair) return null;
+
+  const [latestSnapshot, latestTradeDate] = await Promise.all([
+    getParticipantLatestSnapshot(participantId),
+    getLatestTradeDateForPortfolio(pair.portfolio.id),
+  ]);
+
+  const latestSnapshotDate = latestSnapshot?.date ? String(latestSnapshot.date) : null;
+  const benchmarkEndDate = [latestSnapshotDate, latestTradeDate]
+    .filter((x): x is string => Boolean(x))
+    .sort((a, b) => a.localeCompare(b))
+    .at(-1) ?? null;
+  if (!benchmarkEndDate) return [];
+
+  const tradeRows = await getTradesForPortfolio(pair.portfolio.id, benchmarkEndDate);
+  const chartStartDate =
+    tradeRows[0]?.trade_date
+      ? String(tradeRows[0].trade_date)
+      : latestSnapshotDate ?? benchmarkEndDate;
+  if (!chartStartDate) return [];
+  const seriesStartDate =
+    benchmarkHistorySeedStart(benchmarkEndDate) < chartStartDate
+      ? benchmarkHistorySeedStart(benchmarkEndDate)
+      : chartStartDate;
+
+  let spy: Awaited<ReturnType<typeof getBenchmarkByCode>> = null;
+  let kospi: Awaited<ReturnType<typeof getBenchmarkByCode>> = null;
+  try {
+    [spy, kospi] = await Promise.all([
+      getBenchmarkByCode("SPY"),
+      getBenchmarkByCode("KOSPI"),
+    ]);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Unknown benchmark error";
+    console.error(`[participant-chart] benchmark lookup failed: ${msg}`);
+  }
+
+  let spyByDate: Record<string, number | null> = {};
+  let kospiByDate: Record<string, number | null> = {};
+  if (spy && kospi) {
+    const chartDates = dateRange(seriesStartDate, benchmarkEndDate).filter((date) => !isWeekend(date));
+    let [spyPrices, kospiPrices] = await Promise.all([
+      getBenchmarkPriceSeries(spy.id, "1900-01-01", benchmarkEndDate),
+      getBenchmarkPriceSeries(kospi.id, "1900-01-01", benchmarkEndDate),
+    ]);
+
+    const spyExactDates = new Set(spyPrices.map((row) => String(row.date)));
+    const kospiExactDates = new Set(kospiPrices.map((row) => String(row.date)));
+    const missingSpyDates = chartDates.filter((date) => !spyExactDates.has(date));
+    const missingKospiDates = chartDates.filter((date) => !kospiExactDates.has(date));
+
+    const [spyRefreshed, kospiRefreshed] = await Promise.all([
+      ensureBenchmarkRowsForDates(spy, missingSpyDates),
+      ensureBenchmarkRowsForDates(kospi, missingKospiDates),
+    ]);
+
+    if (spyRefreshed || kospiRefreshed) {
+      [spyPrices, kospiPrices] = await Promise.all([
+        getBenchmarkPriceSeries(spy.id, "1900-01-01", benchmarkEndDate),
+        getBenchmarkPriceSeries(kospi.id, "1900-01-01", benchmarkEndDate),
+      ]);
+    }
+
+    spyByDate = buildBenchmarkReturnByDate(
+      "SPY",
+      seriesStartDate,
+      benchmarkEndDate,
+      spyPrices,
+    ).returnByDate;
+    kospiByDate = buildBenchmarkReturnByDate(
+      "KOSPI",
+      seriesStartDate,
+      benchmarkEndDate,
+      kospiPrices,
+    ).returnByDate;
+  }
+
+  const chartSeries = await buildParticipantChartSeries({
+    portfolio: pair.portfolio,
+    participant: pair.participant,
+    tradeRows,
+    startDate: seriesStartDate,
+    endDate: benchmarkEndDate,
+  });
+
+  return chartSeries.map((row) => ({
+    ...row,
+    spy_indexed:
+      spyByDate[row.date] === null || spyByDate[row.date] === undefined
+        ? null
+        : 100 * (1 + spyByDate[row.date]!),
+    kospi_indexed:
+      kospiByDate[row.date] === null || kospiByDate[row.date] === undefined
+        ? null
+        : 100 * (1 + kospiByDate[row.date]!),
+  }));
+}
+
+export async function fetchParticipantContributionBreakdown(
+  participantId: string,
+  startDate: string,
+  endDate: string,
+) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate) || !/^\d{4}-\d{2}-\d{2}$/.test(endDate)) {
+    throw new Error("startDate/endDate must be YYYY-MM-DD");
+  }
+  if (startDate > endDate) {
+    throw new Error("startDate must be on or before endDate");
+  }
+
+  const pair = await getParticipantById(participantId);
+  if (!pair) return null;
+
+  const cache = createValueCache();
+  const [startState, endState, trades] = await Promise.all([
+    rebuildPortfolioState(pair.portfolio, pair.participant, startDate, cache),
+    rebuildPortfolioState(pair.portfolio, pair.participant, endDate, cache),
+    getTradesForPortfolio(pair.portfolio.id, endDate),
+  ]);
+
+  const startNav = startState.nav_krw;
+
+  type Pos = {
+    instrument: Instrument;
+    quantity: number;
+    avg_cost_local: number;
+  };
+
+  const startPositions = new Map<string, Pos>(
+    startState.positions.map((position) => [position.instrument.id, position]),
+  );
+  const rollingPositions = new Map<string, Pos>(
+    startState.positions.map((position) => [position.instrument.id, { ...position }]),
+  );
+  const endPositions = new Map<string, Pos>(
+    endState.positions.map((position) => [position.instrument.id, position]),
+  );
+
+  const netInvestmentByInstrument = new Map<
+    string,
+    { instrument: Instrument; net_investment_krw: number }
+  >();
+
+  for (const trade of trades.filter((row) => row.trade_date > startDate && row.trade_date <= endDate)) {
+    const instrument = trade.instruments;
+    const existing = rollingPositions.get(instrument.id);
+    const prevQty = existing?.quantity ?? 0;
+
+    let qty = Number(trade.quantity);
+    if (trade.side === "CLOSE") {
+      qty = prevQty;
+    }
+    if (!(qty > 0)) continue;
+
+    const feeRate = trade.fee_rate ? Number(trade.fee_rate) : 0;
+    const slippageBps = trade.slippage_bps ? Number(trade.slippage_bps) : 0;
+    const px = Number(trade.price);
+    const effectivePrice =
+      trade.side === "BUY"
+        ? px * (1 + slippageBps / 10_000)
+        : px * (1 - slippageBps / 10_000);
+    const notionalLocal = qty * effectivePrice;
+    const feeLocal = notionalLocal * feeRate;
+    const fx = instrument.currency === "USD" ? await cache.fxOnOrBefore(trade.trade_date) : 1;
+    const fxRate = fx ?? 1;
+
+    const currentFlow = netInvestmentByInstrument.get(instrument.id) ?? {
+      instrument,
+      net_investment_krw: 0,
+    };
+
+    if (trade.side === "BUY") {
+      const grossLocal = notionalLocal + feeLocal;
+      currentFlow.net_investment_krw += grossLocal * fxRate;
+
+      const nextQty = prevQty + qty;
+      const prevCostLocal = (existing?.avg_cost_local ?? 0) * prevQty;
+      const avg = (prevCostLocal + grossLocal) / nextQty;
+      rollingPositions.set(instrument.id, {
+        instrument,
+        quantity: nextQty,
+        avg_cost_local: avg,
+      });
+    } else {
+      const netLocal = notionalLocal - feeLocal;
+      currentFlow.net_investment_krw -= netLocal * fxRate;
+
+      const avgCost = existing?.avg_cost_local ?? 0;
+      const nextQty = prevQty - qty;
+      if (nextQty <= 1e-9) {
+        rollingPositions.delete(instrument.id);
+      } else {
+        rollingPositions.set(instrument.id, {
+          instrument,
+          quantity: nextQty,
+          avg_cost_local: avgCost,
+        });
+      }
+    }
+
+    netInvestmentByInstrument.set(instrument.id, currentFlow);
+  }
+
+  const instrumentIds = new Set<string>([
+    ...startPositions.keys(),
+    ...endPositions.keys(),
+    ...netInvestmentByInstrument.keys(),
+  ]);
+
+  const rows = await Promise.all(
+    [...instrumentIds].map(async (instrumentId) => {
+      const startPosition = startPositions.get(instrumentId) ?? null;
+      const endPosition = endPositions.get(instrumentId) ?? null;
+      const flow = netInvestmentByInstrument.get(instrumentId) ?? null;
+      const instrument =
+        startPosition?.instrument ?? endPosition?.instrument ?? flow?.instrument ?? null;
+      if (!instrument) return null;
+
+      const startMark = startPosition
+        ? resolveUsableMarkPrice(
+            (await getUsableInstrumentPricePoint(instrument, startDate)).close,
+            startPosition.avg_cost_local,
+          ).value
+        : 0;
+      const endMark = endPosition
+        ? resolveUsableMarkPrice(
+            (await getUsableInstrumentPricePoint(instrument, endDate)).close,
+            endPosition.avg_cost_local,
+          ).value
+        : 0;
+
+      const startFx =
+        instrument.currency === "USD" ? (await cache.fxOnOrBefore(startDate)) ?? 1 : 1;
+      const endFx =
+        instrument.currency === "USD" ? (await cache.fxOnOrBefore(endDate)) ?? 1 : 1;
+
+      const startValueKrw = (startPosition?.quantity ?? 0) * startMark * startFx;
+      const endValueKrw = (endPosition?.quantity ?? 0) * endMark * endFx;
+      const pnlKrw = endValueKrw - startValueKrw - (flow?.net_investment_krw ?? 0);
+      const contributionPct = startNav > 0 ? pnlKrw / startNav : null;
+
+      return {
+        instrument_id: instrument.id,
+        symbol: instrument.symbol,
+        label: instrument.name || instrument.symbol,
+        pnl_krw: pnlKrw,
+        contribution_pct: contributionPct,
+      };
+    }),
+  );
+
+  const validRows = rows
+    .filter(
+      (row): row is NonNullable<(typeof rows)[number]> =>
+        row !== null && Number.isFinite(row.pnl_krw),
+    )
+    .sort((a, b) => b.pnl_krw - a.pnl_krw);
+
+  return {
+    participant_id: pair.participant.id,
+    start_date: startDate,
+    end_date: endDate,
+    start_nav_krw: startNav,
+    top: validRows.slice(0, 5),
+    bottom: [...validRows].sort((a, b) => a.pnl_krw - b.pnl_krw).slice(0, 5),
   };
 }
 

@@ -31,13 +31,28 @@ import {
   resolveStudyQuoteTarget,
 } from "@/lib/study-tracker-auto";
 import {
+  fetchBestClosePointFromProviderChain,
+  isExactPricePoint,
+  pickPreferredClosePoint,
+  type ProviderAttemptLog,
+} from "@/lib/market-data";
+import {
   mapStudySessionCompany,
   mapStudyTrackerIdea,
   toStudySessionCompanyInput,
   toStudyTrackerIdeaInput,
 } from "@/lib/study-tracker";
 import type { Instrument } from "@/types/db";
-import { dateRange, yesterdayInSeoul } from "@/lib/time";
+import { dateRange, todayInSeoul } from "@/lib/time";
+
+function benchmarkHistorySeedStart(endDate: string) {
+  return `${String(Number(endDate.slice(0, 4)) - 1)}-10-01`;
+}
+
+function isWeekend(date: string) {
+  const day = new Date(`${date}T00:00:00Z`).getUTCDay();
+  return day === 0 || day === 6;
+}
 
 async function logJob(
   job_name: string,
@@ -60,12 +75,6 @@ async function logJob(
   }
 }
 
-interface ProviderAttemptLog {
-  provider: string;
-  status: "success" | "error" | "unavailable";
-  reason?: string;
-}
-
 function buildRequestedProviderRaw() {
   return (
     process.env.MARKET_DATA_PROVIDERS?.trim() ??
@@ -79,63 +88,26 @@ async function fetchPriceFromProviderChain(
   instrument: Instrument,
   targetDate: string,
 ): Promise<{
+  point: { date: string; close: number } | null;
   close: number | null;
   usedProvider: string | null;
   attempts: ProviderAttemptLog[];
   finalReason: string | null;
 }> {
-  const attempts: ProviderAttemptLog[] = [];
+  const live = await fetchBestClosePointFromProviderChain(handles, {
+    symbol: instrument.symbol,
+    market: instrument.market,
+    date: targetDate,
+    providerSymbol: instrument.provider_symbol,
+  });
 
-  for (const handle of handles) {
-    const providerName = handle.requestedProvider;
-    if (!handle.provider) {
-      attempts.push({
-        provider: providerName,
-        status: "unavailable",
-        reason: handle.initError ?? "Provider is unavailable",
-      });
-      continue;
-    }
-
-    try {
-      const close = await handle.provider.getDailyClose(
-        instrument.symbol,
-        instrument.market,
-        targetDate,
-        instrument.provider_symbol,
-      );
-      if (close !== null && Number.isFinite(close)) {
-        attempts.push({ provider: providerName, status: "success" });
-        return {
-          close,
-          usedProvider: providerName,
-          attempts,
-          finalReason: null,
-        };
-      }
-      attempts.push({
-        provider: providerName,
-        status: "error",
-        reason: "No close price returned",
-      });
-    } catch (err) {
-      attempts.push({
-        provider: providerName,
-        status: "error",
-        reason: err instanceof Error ? err.message : "Unknown provider error",
-      });
-    }
-  }
-
-  let last: string | null = null;
-  for (let i = attempts.length - 1; i >= 0; i -= 1) {
-    const reason = attempts[i]?.reason;
-    if (reason) {
-      last = reason;
-      break;
-    }
-  }
-  return { close: null, usedProvider: null, attempts, finalReason: last };
+  return {
+    point: live.point ? { date: live.point.date, close: live.point.close } : null,
+    close: live.point?.close ?? null,
+    usedProvider: live.usedProvider,
+    attempts: live.attempts,
+    finalReason: live.finalReason,
+  };
 }
 
 async function fetchFxFromProviderChain(
@@ -206,7 +178,7 @@ export async function updatePricesForDate(targetDate: string) {
       instrument_id: string;
       date: string;
       close: number;
-      source: "provider" | "carry_forward";
+      source: string;
       provider_used: string | null;
     }> = [];
     const failures: Array<{ symbol: string; reason: string }> = [];
@@ -220,47 +192,71 @@ export async function updatePricesForDate(targetDate: string) {
     const providerUsage: Record<string, number> = {};
 
     for (const inst of instruments) {
+      const storedPoint = await getPricePointOnOrBefore(inst.id, targetDate);
+
+      if (isExactPricePoint(storedPoint, targetDate)) {
+        rows.push({
+          instrument_id: inst.id,
+          date: targetDate,
+          close: storedPoint!.close,
+          source: storedPoint!.source ?? "provider",
+          provider_used: null,
+        });
+        continue;
+      }
+
       const live = await fetchPriceFromProviderChain(
         providerResolution.handles,
         inst,
         targetDate,
       );
 
-      if (live.close !== null) {
-        const used = live.usedProvider ?? "UNKNOWN";
-        providerUsage[used] = (providerUsage[used] ?? 0) + 1;
+      const livePoint = live.point
+        ? {
+            ...live.point,
+            source: "provider",
+          }
+        : null;
+
+      const preferredPoint = pickPreferredClosePoint(targetDate, storedPoint, livePoint);
+
+      if (preferredPoint) {
+        const usingLivePoint = preferredPoint === livePoint;
+        const isExact = isExactPricePoint(preferredPoint, targetDate);
+        if (usingLivePoint && live.usedProvider) {
+          providerUsage[live.usedProvider] = (providerUsage[live.usedProvider] ?? 0) + 1;
+        }
+
         rows.push({
           instrument_id: inst.id,
           date: targetDate,
-          close: live.close,
-          source: "provider",
-          provider_used: live.usedProvider,
+          close: preferredPoint.close,
+          source: isExact
+            ? usingLivePoint
+              ? "provider"
+              : preferredPoint.source ?? "provider"
+            : "carry_forward",
+          provider_used: usingLivePoint && isExact ? live.usedProvider : null,
         });
+
+        if (!isExact) {
+          warnings.push({
+            symbol: inst.symbol,
+            reason:
+              live.finalReason ??
+              `${preferredPoint.date} 기준 저장 종가를 사용했습니다.`,
+            fallback_date: preferredPoint.date,
+            fallback_close: preferredPoint.close,
+            provider_attempts: live.attempts,
+          });
+        }
         continue;
       }
 
-      const fallback = await getPricePointOnOrBefore(inst.id, targetDate);
-      if (fallback) {
-        rows.push({
-          instrument_id: inst.id,
-          date: targetDate,
-          close: fallback.close,
-          source: "carry_forward",
-          provider_used: null,
-        });
-        warnings.push({
-          symbol: inst.symbol,
-          reason: live.finalReason ?? "All providers failed",
-          fallback_date: fallback.date,
-          fallback_close: fallback.close,
-          provider_attempts: live.attempts,
-        });
-      } else {
-        failures.push({
-          symbol: inst.symbol,
-          reason: live.finalReason ?? "No provider data and no historical fallback",
-        });
-      }
+      failures.push({
+        symbol: inst.symbol,
+        reason: live.finalReason ?? "No provider data and no historical fallback",
+      });
     }
 
     if (rows.length > 0) {
@@ -408,6 +404,164 @@ export async function updateFxForDate(targetDate: string) {
   }
 }
 
+export async function ensureBenchmarkHistory(targetDate: string) {
+  try {
+    const requestedProviderRaw = buildRequestedProviderRaw();
+    const providerResolution = resolveMarketDataProviders();
+    const [spy, kospi] = await Promise.all([
+      getBenchmarkByCode("SPY"),
+      getBenchmarkByCode("KOSPI"),
+    ]);
+
+    const instruments = [spy, kospi].filter((x): x is Instrument => Boolean(x));
+    if (instruments.length === 0) {
+      return {
+        status: "failed" as const,
+        startDate: benchmarkHistorySeedStart(targetDate),
+        rows: 0,
+        warnings: [] as Array<{ symbol: string; date: string; reason: string }>,
+        failures: [{ symbol: "*", date: targetDate, reason: "Benchmark instruments are missing" }],
+      };
+    }
+
+    const startDate = benchmarkHistorySeedStart(targetDate);
+    const weekdays = dateRange(startDate, targetDate).filter((date) => !isWeekend(date));
+    const rows: Array<{
+      instrument_id: string;
+      date: string;
+      close: number;
+      source: string;
+    }> = [];
+    const warnings: Array<{ symbol: string; date: string; reason: string }> = [];
+    const failures: Array<{ symbol: string; date: string; reason: string }> = [];
+    const providerUsage: Record<string, number> = {};
+
+    const existingByInstrument = new Map<string, Set<string>>();
+    for (const instrument of instruments) {
+      const prices = await getBenchmarkPriceSeries(instrument.id, startDate, targetDate);
+      existingByInstrument.set(
+        instrument.id,
+        new Set(prices.map((row) => String(row.date))),
+      );
+    }
+
+    for (const instrument of instruments) {
+      const existingDates = existingByInstrument.get(instrument.id) ?? new Set<string>();
+
+      for (const date of weekdays) {
+        if (existingDates.has(date)) continue;
+
+        const storedPoint = await getPricePointOnOrBefore(instrument.id, date);
+        const live = await fetchPriceFromProviderChain(
+          providerResolution.handles,
+          instrument,
+          date,
+        );
+        const livePoint = live.point
+          ? {
+              ...live.point,
+              source: "provider",
+            }
+          : null;
+        const preferredPoint = pickPreferredClosePoint(date, storedPoint, livePoint);
+
+        if (!preferredPoint) {
+          failures.push({
+            symbol: instrument.symbol,
+            date,
+            reason: live.finalReason ?? "No provider data and no historical fallback",
+          });
+          continue;
+        }
+
+        const usingLivePoint = preferredPoint === livePoint;
+        const isExact = isExactPricePoint(preferredPoint, date);
+        if (usingLivePoint && live.usedProvider) {
+          providerUsage[live.usedProvider] = (providerUsage[live.usedProvider] ?? 0) + 1;
+        }
+
+        rows.push({
+          instrument_id: instrument.id,
+          date,
+          close: preferredPoint.close,
+          source: isExact
+            ? usingLivePoint
+              ? "provider"
+              : preferredPoint.source ?? "provider"
+            : "carry_forward",
+        });
+
+        if (!isExact) {
+          warnings.push({
+            symbol: instrument.symbol,
+            date,
+            reason:
+              live.finalReason ?? `${preferredPoint.date} 기준 종가를 사용했습니다.`,
+          });
+        }
+      }
+    }
+
+    if (rows.length > 0) {
+      await upsertPrice(
+        rows.map((row) => ({
+          instrument_id: row.instrument_id,
+          date: row.date,
+          close: String(row.close),
+          source: row.source,
+        })),
+      );
+    }
+
+    const totalMissing = rows.length + failures.length;
+    const status =
+      failures.length === 0 && warnings.length === 0
+        ? "success"
+        : failures.length < Math.max(totalMissing, 1)
+          ? "partial"
+          : "failed";
+
+    await logJob(
+      "ensure_benchmark_history",
+      targetDate,
+      status,
+      {
+        start_date: startDate,
+        end_date: targetDate,
+        requested_provider: requestedProviderRaw,
+        configured_chain: providerResolution.handles.map((h) => h.requestedProvider),
+        invalid_provider_tokens: providerResolution.invalidValues,
+        instruments: instruments.map((instrument) => instrument.symbol),
+        filled_rows: rows.length,
+        failures: failures.length,
+        warnings: warnings.length,
+        provider_usage: providerUsage,
+        warning_details: warnings,
+        failure_details: failures,
+      },
+      failures.length > 0 ? `Failed benchmark dates: ${failures.length}` : null,
+    );
+
+    return {
+      status,
+      startDate,
+      rows: rows.length,
+      warnings,
+      failures,
+    };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Unknown error";
+    await logJob("ensure_benchmark_history", targetDate, "failed", { fatal: true }, msg);
+    return {
+      status: "failed" as const,
+      startDate: benchmarkHistorySeedStart(targetDate),
+      rows: 0,
+      warnings: [] as Array<{ symbol: string; date: string; reason: string }>,
+      failures: [{ symbol: "*", date: targetDate, reason: msg }],
+    };
+  }
+}
+
 async function buildBenchmarkContext(startDate: string, endDate: string) {
   const spy = await getBenchmarkByCode("SPY");
   const kospi = await getBenchmarkByCode("KOSPI");
@@ -523,6 +677,7 @@ export async function refreshStudyTrackerIdeasForDate(targetDate: string) {
     for (const idea of ideas) {
       try {
         let seededPrice: number | null = null;
+        let seededPoint: { date: string; close: number; source?: string } | null = null;
         let usedPriceTable = false;
         let warning: string | null = null;
         const quoteTarget = resolveStudyQuoteTarget(idea.ticker, idea.currency);
@@ -532,9 +687,10 @@ export async function refreshStudyTrackerIdeasForDate(targetDate: string) {
           if (instrument) {
             const pricePoint = await getPricePointOnOrBefore(instrument.id, targetDate);
             if (pricePoint) {
+              seededPoint = pricePoint;
               seededPrice = pricePoint.close;
-              usedPriceTable = true;
-              if (pricePoint.date !== targetDate || pricePoint.source === "carry_forward") {
+              usedPriceTable = isExactPricePoint(pricePoint, targetDate);
+              if (!usedPriceTable) {
                 warning = `${pricePoint.date} 기준 종가를 사용했습니다.`;
               }
             }
@@ -547,9 +703,14 @@ export async function refreshStudyTrackerIdeasForDate(targetDate: string) {
             currency: idea.currency,
             date: targetDate,
           });
-          if (providerQuote.point?.close !== null && providerQuote.point?.close !== undefined) {
-            seededPrice = providerQuote.point.close;
-            warning = null;
+          const chosenPoint = pickPreferredClosePoint(
+            targetDate,
+            seededPoint,
+            providerQuote.point,
+          );
+          if (chosenPoint?.close !== null && chosenPoint?.close !== undefined) {
+            seededPrice = chosenPoint.close;
+            warning = chosenPoint.date < targetDate ? `${chosenPoint.date} 기준 종가를 사용했습니다.` : null;
           } else if (providerQuote.warning) {
             warning = providerQuote.warning;
           }
@@ -653,7 +814,9 @@ export async function refreshStudySessionCompaniesForDate(targetDate: string) {
     for (const company of companies) {
       try {
         let seededPrice: number | null = null;
+        let seededPoint: { date: string; close: number; source?: string } | null = null;
         let warning: string | null = null;
+        let usedExactPriceTable = false;
         const quoteTarget = resolveStudyQuoteTarget(company.ticker, company.currency);
 
         if (quoteTarget) {
@@ -661,23 +824,30 @@ export async function refreshStudySessionCompaniesForDate(targetDate: string) {
           if (instrument) {
             const pricePoint = await getPricePointOnOrBefore(instrument.id, targetDate);
             if (pricePoint) {
+              seededPoint = pricePoint;
               seededPrice = pricePoint.close;
-              if (pricePoint.date !== targetDate || pricePoint.source === "carry_forward") {
+              usedExactPriceTable = isExactPricePoint(pricePoint, targetDate);
+              if (!usedExactPriceTable) {
                 warning = `${pricePoint.date} 기준 종가를 사용했습니다.`;
               }
             }
           }
         }
 
-        if (seededPrice === null && quoteTarget) {
+        if (!usedExactPriceTable && quoteTarget) {
           const providerQuote = await fetchStudyQuotePointOnOrBefore({
             ticker: company.ticker,
             currency: company.currency,
             date: targetDate,
           });
-          if (providerQuote.point?.close !== null && providerQuote.point?.close !== undefined) {
-            seededPrice = providerQuote.point.close;
-            warning = null;
+          const chosenPoint = pickPreferredClosePoint(
+            targetDate,
+            seededPoint,
+            providerQuote.point,
+          );
+          if (chosenPoint?.close !== null && chosenPoint?.close !== undefined) {
+            seededPrice = chosenPoint.close;
+            warning = chosenPoint.date < targetDate ? `${chosenPoint.date} 기준 종가를 사용했습니다.` : null;
           } else if (providerQuote.warning) {
             warning = providerQuote.warning;
           }
@@ -760,13 +930,14 @@ export async function refreshStudySessionCompaniesForDate(targetDate: string) {
   }
 }
 
-export async function runDailyPipeline(targetDate = yesterdayInSeoul()) {
+export async function runDailyPipeline(targetDate = todayInSeoul()) {
   const prices = await updatePricesForDate(targetDate);
   const fx = await updateFxForDate(targetDate);
+  const benchmarks = await ensureBenchmarkHistory(targetDate);
   const snapshots = await generateSnapshotsForDate(targetDate);
   const studyTracker = await refreshStudyTrackerIdeasForDate(targetDate);
   const freeTopics = await refreshStudySessionCompaniesForDate(targetDate);
-  return { targetDate, prices, fx, snapshots, studyTracker, freeTopics };
+  return { targetDate, prices, fx, benchmarks, snapshots, studyTracker, freeTopics };
 }
 
 export async function backfillPrices(startDate: string, endDate: string) {

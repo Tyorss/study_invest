@@ -76,6 +76,30 @@ async function runPython(args: string[]) {
   return parsed;
 }
 
+export async function lookupInstrumentNameWithPython(
+  backend: PythonBackend,
+  symbol: string,
+  market: Market,
+  providerSymbol?: string,
+) {
+  const parsed = await runPython([
+    "--backend",
+    backend,
+    "--mode",
+    "name",
+    "--symbol",
+    symbol,
+    "--market",
+    market,
+    "--date",
+    new Date().toISOString().slice(0, 10),
+    ...(providerSymbol ? ["--provider-symbol", providerSymbol] : []),
+  ]);
+
+  const name = typeof parsed.name === "string" ? parsed.name.trim() : "";
+  return name || null;
+}
+
 export class PythonMarketDataProvider implements MarketDataProvider {
   constructor(private readonly backend: PythonBackend) {}
 

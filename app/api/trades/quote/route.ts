@@ -1,5 +1,11 @@
 import { NextResponse } from "next/server";
 import { getInstrumentBySymbolMarket, getPricePointOnOrBefore } from "@/lib/db";
+import {
+  fetchBestClosePointFromProviderChain,
+  isExactPricePoint,
+  pickPreferredClosePoint,
+} from "@/lib/market-data";
+import { lookupInstrumentNameWithPython } from "@/lib/providers/python-market-data-provider";
 import { resolveMarketDataProviders } from "@/lib/providers";
 import type { Market } from "@/types/db";
 
@@ -16,6 +22,32 @@ function defaultProviderSymbol(symbol: string, market: Market): string {
   if (market === "KR") return `${symbol}:KRX`;
   if (market === "INDEX" && symbol === "KS11") return "KOSPI";
   return symbol;
+}
+
+async function resolveInstrumentName(params: {
+  symbol: string;
+  market: Market;
+  providerSymbol: string;
+  fallbackName: string | null;
+}) {
+  if (params.market === "KR" && /^\d{6}$/.test(params.symbol)) {
+    try {
+      const name = await lookupInstrumentNameWithPython(
+        "fdr",
+        params.symbol,
+        params.market,
+        params.providerSymbol,
+      );
+      if (name) return name;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unknown instrument name lookup error";
+      console.error(
+        `[quote] failed to resolve instrument name for ${params.symbol}: ${message}`,
+      );
+    }
+  }
+
+  return params.fallbackName;
 }
 
 function noStoreJson(body: unknown, init?: ResponseInit) {
@@ -46,84 +78,102 @@ export async function GET(req: Request) {
     const market = marketInput as Market;
     const symbol = normalizeSymbol(symbolInput, market);
     const instrument = await getInstrumentBySymbolMarket(symbol, market);
+    const storedPoint = instrument ? await getPricePointOnOrBefore(instrument.id, date) : null;
+    const providerSymbol = instrument?.provider_symbol ?? defaultProviderSymbol(symbol, market);
+    const instrumentName = await resolveInstrumentName({
+      symbol,
+      market,
+      providerSymbol,
+      fallbackName: instrument?.name ?? null,
+    });
 
-    if (instrument) {
-      const point = await getPricePointOnOrBefore(instrument.id, date);
-      if (point) {
-        return noStoreJson({
-          ok: true,
-          symbol,
-          market,
-          requested_date: date,
-          effective_date: point.date,
-          price: point.close,
-          source: `stored:${point.source ?? "provider"}`,
-          provider_symbol: instrument.provider_symbol,
-          instrument_id: instrument.id,
-          instrument_name: instrument.name,
-        });
-      }
+    if (instrument && isExactPricePoint(storedPoint, date)) {
+      return noStoreJson({
+        ok: true,
+        symbol,
+        market,
+        requested_date: date,
+        effective_date: storedPoint!.date,
+        price: storedPoint!.close,
+        source: `stored:${storedPoint!.source ?? "provider"}`,
+        provider_symbol: instrument.provider_symbol,
+        instrument_id: instrument.id,
+        instrument_name: instrumentName,
+      });
     }
 
-    const providerSymbol = instrument?.provider_symbol ?? defaultProviderSymbol(symbol, market);
     const providerResolution = resolveMarketDataProviders();
-    const reasons: string[] = [];
+    const live = await fetchBestClosePointFromProviderChain(providerResolution.handles, {
+      symbol,
+      market,
+      date,
+      providerSymbol,
+    });
 
-    for (const handle of providerResolution.handles) {
-      if (!handle.provider) {
-        reasons.push(
-          `[${handle.requestedProvider}] ${handle.initError ?? "Provider unavailable"}`,
-        );
-        continue;
-      }
+    const preferredPoint = pickPreferredClosePoint(
+      date,
+      storedPoint,
+      live.point
+        ? {
+            ...live.point,
+            source: "provider",
+          }
+        : null,
+    );
 
-      try {
-        const point = handle.provider.getDailyClosePoint
-          ? await handle.provider.getDailyClosePoint(symbol, market, date, providerSymbol)
-          : null;
-        if (point && Number.isFinite(point.close)) {
-          return noStoreJson({
-            ok: true,
-            symbol,
-            market,
-            requested_date: date,
-            effective_date: point.date,
-            price: point.close,
-            source: `provider:${handle.requestedProvider}`,
-            provider_symbol: providerSymbol,
-            instrument_id: instrument?.id ?? null,
-            instrument_name: instrument?.name ?? null,
-          });
-        }
+    if (preferredPoint && preferredPoint === storedPoint) {
+      return noStoreJson({
+        ok: true,
+        symbol,
+        market,
+        requested_date: date,
+        effective_date: storedPoint.date,
+        price: storedPoint.close,
+        source: `stored:${storedPoint.source ?? "provider"}`,
+        provider_symbol: providerSymbol,
+        instrument_id: instrument?.id ?? null,
+        instrument_name: instrumentName,
+      });
+    }
 
-        const close = await handle.provider.getDailyClose(symbol, market, date, providerSymbol);
-        if (close !== null && Number.isFinite(close)) {
-          return noStoreJson({
-            ok: true,
-            symbol,
-            market,
-            requested_date: date,
-            effective_date: null,
-            price: close,
-            source: `provider:${handle.requestedProvider}`,
-            provider_symbol: providerSymbol,
-            instrument_id: instrument?.id ?? null,
-            instrument_name: instrument?.name ?? null,
-          });
-        }
+    if (preferredPoint && live.point && Number.isFinite(preferredPoint.close)) {
+      return noStoreJson({
+        ok: true,
+        symbol,
+        market,
+        requested_date: date,
+        effective_date: preferredPoint.date,
+        price: preferredPoint.close,
+        source: `provider:${live.usedProvider ?? "unknown"}`,
+        provider_symbol: providerSymbol,
+        instrument_id: instrument?.id ?? null,
+        instrument_name: instrumentName,
+      });
+    }
 
-        reasons.push(`[${handle.requestedProvider}] No close price returned`);
-      } catch (err) {
-        const message = err instanceof Error ? err.message : "Unknown provider error";
-        reasons.push(`[${handle.requestedProvider}] ${message}`);
-      }
+    if (storedPoint) {
+      return noStoreJson({
+        ok: true,
+        symbol,
+        market,
+        requested_date: date,
+        effective_date: storedPoint.date,
+        price: storedPoint.close,
+        source: `stored:${storedPoint.source ?? "provider"}`,
+        provider_symbol: providerSymbol,
+        instrument_id: instrument?.id ?? null,
+        instrument_name: instrumentName,
+      });
     }
 
     return noStoreJson(
       {
         error:
-          reasons.length > 0
-            ? reasons.join(" | ")
+          live.attempts.length > 0
+            ? live.attempts
+                .filter((attempt) => attempt.reason)
+                .map((attempt) => `[${attempt.provider}] ${attempt.reason}`)
+                .join(" | ")
             : `No price found for ${symbol} on or before ${date}`,
       },
       { status: 404 },

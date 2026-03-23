@@ -9,7 +9,9 @@ import {
   getStudySessionCompanies,
   getStudySessions,
   getStudyTrackerIdeas,
+  updateStudyTrackerIdea,
 } from "@/lib/db";
+import { autoFillStudyTrackerIdea } from "@/lib/study-tracker-auto";
 import { todayInSeoul } from "@/lib/time";
 import type {
   StudyCallFeedback,
@@ -328,9 +330,38 @@ export function toStudyTrackerIdeaInput(idea: StudyTrackerIdea): StudyTrackerIde
   };
 }
 
+async function hydrateMissingStudyIdeaPrices(rows: StudyTrackerIdeaRow[]) {
+  const refreshed: StudyTrackerIdeaRow[] = [];
+
+  for (const row of rows) {
+    const currentPrice = toNumber(row.current_price);
+    if (currentPrice !== null && currentPrice > 0) {
+      refreshed.push(row);
+      continue;
+    }
+
+    try {
+      const idea = mapStudyTrackerIdea(row);
+      const enriched = await autoFillStudyTrackerIdea(toStudyTrackerIdeaInput(idea), {
+        quoteDate: todayInSeoul(),
+      });
+      const updated = await updateStudyTrackerIdea(row.id, enriched.input);
+      refreshed.push(updated);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unknown study price hydration error";
+      console.error(
+        `[study-tracker] missing current price refresh failed for ${row.ticker}: ${message}`,
+      );
+      refreshed.push(row);
+    }
+  }
+
+  return refreshed;
+}
+
 async function loadStudyTrackerContext() {
   const [
-    ideaRows,
+    rawIdeaRows,
     sessionRows,
     companyRows,
     feedbackRows,
@@ -346,6 +377,7 @@ async function loadStudyTrackerContext() {
     getStudyLinkedTrades(),
     getParticipantsList(),
   ]);
+  const ideaRows = await hydrateMissingStudyIdeaPrices(rawIdeaRows);
 
   const participantMap = new Map(participants.map((row) => [row.id, row.name]));
   const sessionMap = new Map<number, StudySession>();
