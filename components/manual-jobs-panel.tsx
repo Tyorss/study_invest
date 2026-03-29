@@ -3,7 +3,11 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 
-type JobName = "run-daily" | "generate-snapshots";
+type JobName =
+  | "run-daily"
+  | "generate-snapshots"
+  | "backfill-benchmarks"
+  | "backfill-traded-prices";
 
 type JobResult = {
   prices?: {
@@ -15,6 +19,15 @@ type JobResult = {
     status?: string;
     startDate?: string;
     rows?: number;
+    failures?: Array<unknown>;
+    warnings?: Array<unknown>;
+  };
+  tradedPrices?: {
+    status?: string;
+    startDate?: string;
+    rows?: number;
+    instrumentCount?: number;
+    unresolvedTargets?: number;
     failures?: Array<unknown>;
     warnings?: Array<unknown>;
   };
@@ -54,6 +67,7 @@ type ManualJobResponse = {
   ok?: boolean;
   job?: JobName;
   targetDate?: string;
+  startDate?: string;
   result?: JobResult;
   error?: string;
 };
@@ -65,10 +79,19 @@ function translateError(message: string) {
   if (message.includes("Invalid JSON body")) return "요청 형식이 올바르지 않습니다.";
   if (message.includes("Invalid job type")) return "실행할 작업 종류가 올바르지 않습니다.";
   if (message.includes("date must be YYYY-MM-DD")) return "날짜 형식은 YYYY-MM-DD여야 합니다.";
+  if (message.includes("startDate must be YYYY-MM-DD"))
+    return "시작일 형식은 YYYY-MM-DD여야 합니다.";
+  if (message.includes("startDate must be on or before date"))
+    return "시작일은 종료일보다 늦을 수 없습니다.";
   return message;
 }
 
-function buildSummary(job: JobName, targetDate: string, result: JobResult | undefined) {
+function buildSummary(
+  job: JobName,
+  targetDate: string,
+  result: JobResult | undefined,
+  startDate?: string,
+) {
   if (!result) {
     return `${targetDate} 기준 작업이 완료되었습니다.`;
   }
@@ -83,10 +106,7 @@ function buildSummary(job: JobName, targetDate: string, result: JobResult | unde
     return [
       `${targetDate} 기준 일일 업데이트를 실행했습니다.`,
       prices?.rows !== undefined ? `가격 ${prices.rows}건 처리` : null,
-      benchmarks?.rows !== undefined
-        ? `벤치마크 ${benchmarks.rows}건 보강`
-        : null,
-      benchmarks?.startDate ? `${benchmarks.startDate}부터 확인` : null,
+      benchmarks?.rows !== undefined ? `벤치마크 최신값 ${benchmarks.rows}건 반영` : null,
       fx?.status ? `환율 ${fx.status}` : null,
       snapshots?.successCount !== undefined ? `스냅샷 ${snapshots.successCount}명 반영` : null,
       studyTracker?.refreshedCount !== undefined
@@ -106,6 +126,42 @@ function buildSummary(job: JobName, targetDate: string, result: JobResult | unde
       .join(" · ");
   }
 
+  if (job === "backfill-benchmarks") {
+    return [
+      `벤치마크 과거 데이터를 채웠습니다.`,
+      startDate ? `${startDate} ~ ${targetDate}` : targetDate,
+      result.benchmarks?.rows !== undefined
+        ? `추가 ${result.benchmarks.rows}건`
+        : null,
+      result.benchmarks?.failures && result.benchmarks.failures.length > 0
+        ? `실패 ${result.benchmarks.failures.length}건`
+        : null,
+    ]
+      .filter(Boolean)
+      .join(" · ");
+  }
+
+  if (job === "backfill-traded-prices") {
+    return [
+      `종목 과거 가격을 채웠습니다.`,
+      startDate ? `${startDate} ~ ${targetDate}` : targetDate,
+      result.tradedPrices?.instrumentCount !== undefined
+        ? `대상 종목 ${result.tradedPrices.instrumentCount}개`
+        : null,
+      result.tradedPrices?.rows !== undefined
+        ? `추가 ${result.tradedPrices.rows}건`
+        : null,
+      result.tradedPrices?.unresolvedTargets
+        ? `미매핑 ${result.tradedPrices.unresolvedTargets}개`
+        : null,
+      result.tradedPrices?.failures && result.tradedPrices.failures.length > 0
+        ? `실패 ${result.tradedPrices.failures.length}건`
+        : null,
+    ]
+      .filter(Boolean)
+      .join(" · ");
+  }
+
   return [
     `${targetDate} 기준 스냅샷을 다시 만들었습니다.`,
     result.successCount !== undefined ? `${result.successCount}명 반영` : null,
@@ -117,19 +173,27 @@ function buildSummary(job: JobName, targetDate: string, result: JobResult | unde
 export function ManualJobsPanel({
   defaultDailyDate,
   defaultSnapshotDate,
+  defaultBenchmarkStartDate,
+  defaultTradedPriceStartDate,
 }: {
   defaultDailyDate: string;
   defaultSnapshotDate: string;
+  defaultBenchmarkStartDate: string;
+  defaultTradedPriceStartDate: string;
 }) {
   const router = useRouter();
   const [secret, setSecret] = useState("");
   const [dailyDate, setDailyDate] = useState(defaultDailyDate);
   const [snapshotDate, setSnapshotDate] = useState(defaultSnapshotDate);
+  const [benchmarkStartDate, setBenchmarkStartDate] = useState(defaultBenchmarkStartDate);
+  const [benchmarkEndDate, setBenchmarkEndDate] = useState(defaultDailyDate);
+  const [tradedPriceStartDate, setTradedPriceStartDate] = useState(defaultTradedPriceStartDate);
+  const [tradedPriceEndDate, setTradedPriceEndDate] = useState(defaultDailyDate);
   const [busyJob, setBusyJob] = useState<JobName | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  async function runJob(job: JobName, date: string) {
+  async function runJob(job: JobName, date: string, startDate?: string) {
     setBusyJob(job);
     setMessage(null);
     setError(null);
@@ -142,6 +206,7 @@ export function ManualJobsPanel({
         body: JSON.stringify({
           job,
           date,
+          startDate,
           secret,
         }),
       });
@@ -150,7 +215,7 @@ export function ManualJobsPanel({
         throw new Error(json.error ?? `HTTP ${res.status}`);
       }
 
-      setMessage(buildSummary(job, json.targetDate ?? date, json.result));
+      setMessage(buildSummary(job, json.targetDate ?? date, json.result, json.startDate ?? startDate));
       router.refresh();
     } catch (err) {
       const message = err instanceof Error ? err.message : "작업 실행에 실패했습니다.";
@@ -222,9 +287,75 @@ export function ManualJobsPanel({
           </button>
         </div>
 
+        <div className="grid grid-cols-1 gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
+          <label className="text-sm">
+            <div className="mb-1 text-slate-600">벤치마크 백필 시작일</div>
+            <input
+              type="date"
+              value={benchmarkStartDate}
+              onChange={(e) => setBenchmarkStartDate(e.target.value)}
+              className="w-full rounded-lg border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
+            />
+          </label>
+          <label className="text-sm">
+            <div className="mb-1 text-slate-600">벤치마크 백필 종료일</div>
+            <input
+              type="date"
+              value={benchmarkEndDate}
+              onChange={(e) => setBenchmarkEndDate(e.target.value)}
+              className="w-full rounded-lg border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
+            />
+          </label>
+          <button
+            type="button"
+            disabled={busyJob !== null}
+            onClick={() => runJob("backfill-benchmarks", benchmarkEndDate, benchmarkStartDate)}
+            className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-900 hover:bg-slate-50 disabled:opacity-60 xl:self-end"
+          >
+            {busyJob === "backfill-benchmarks" ? "실행 중..." : "벤치마크 과거 채우기"}
+          </button>
+        </div>
+
         <div className="text-xs text-slate-500">
-          일일 업데이트 실행은 가격, 환율, 스냅샷을 모두 갱신합니다. 스냅샷 다시 만들기는 거래 수정 후
-          리더보드와 상세 화면을 빠르게 다시 맞출 때 사용합니다.
+          일일 업데이트는 당일 최신 가격, 환율, 스냅샷만 갱신합니다. 과거 SPY/KOSPI 비교 구간이
+          비어 있으면 아래의 벤치마크 과거 채우기를 별도로 실행하세요.
+        </div>
+
+        <div className="grid grid-cols-1 gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
+          <label className="text-sm">
+            <div className="mb-1 text-slate-600">종목 가격 백필 시작일</div>
+            <input
+              type="date"
+              value={tradedPriceStartDate}
+              onChange={(e) => setTradedPriceStartDate(e.target.value)}
+              className="w-full rounded-lg border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
+            />
+          </label>
+          <label className="text-sm">
+            <div className="mb-1 text-slate-600">종목 가격 백필 종료일</div>
+            <input
+              type="date"
+              value={tradedPriceEndDate}
+              onChange={(e) => setTradedPriceEndDate(e.target.value)}
+              className="w-full rounded-lg border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
+            />
+          </label>
+          <button
+            type="button"
+            disabled={busyJob !== null}
+            onClick={() =>
+              runJob("backfill-traded-prices", tradedPriceEndDate, tradedPriceStartDate)
+            }
+            className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-900 hover:bg-slate-50 disabled:opacity-60 xl:self-end"
+          >
+            {busyJob === "backfill-traded-prices" ? "실행 중..." : "종목 가격 채우기"}
+          </button>
+        </div>
+
+        <div className="text-xs text-slate-500">
+          이 작업은 실제 거래 종목에 더해 스터디 종목과 자유 종목에 연결되는 종목까지 함께 보고,
+          선택한 기간의 일별 가격 히스토리를 채웁니다. 포트폴리오 비교 차트와 종목 추적 정확도를
+          함께 보강할 때 사용하세요.
         </div>
 
         {(message || error) && (

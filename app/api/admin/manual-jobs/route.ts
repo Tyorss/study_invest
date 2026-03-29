@@ -1,16 +1,26 @@
 import { timingSafeEqual } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
-import { generateSnapshotsForDate, runDailyPipeline } from "@/lib/jobs/runner";
+import {
+  backfillTradedInstrumentPrices,
+  ensureBenchmarkHistory,
+  generateSnapshotsForDate,
+  runDailyPipeline,
+} from "@/lib/jobs/runner";
 import { todayInSeoul } from "@/lib/time";
 
 export const runtime = "nodejs";
 
-type ManualJobName = "run-daily" | "generate-snapshots";
+type ManualJobName =
+  | "run-daily"
+  | "generate-snapshots"
+  | "backfill-benchmarks"
+  | "backfill-traded-prices";
 
 type Payload = {
   secret?: string;
   job?: ManualJobName;
   date?: string;
+  startDate?: string;
 };
 
 function isValidDate(date: string) {
@@ -47,7 +57,12 @@ export async function POST(req: NextRequest) {
   }
 
   const job = body?.job;
-  if (job !== "run-daily" && job !== "generate-snapshots") {
+  if (
+    job !== "run-daily" &&
+    job !== "generate-snapshots" &&
+    job !== "backfill-benchmarks" &&
+    job !== "backfill-traded-prices"
+  ) {
     return NextResponse.json({ error: "Invalid job type" }, { status: 400 });
   }
 
@@ -55,11 +70,45 @@ export async function POST(req: NextRequest) {
   if (!isValidDate(targetDate)) {
     return NextResponse.json({ error: "date must be YYYY-MM-DD" }, { status: 400 });
   }
+  const startDate = body?.startDate?.trim() || "";
+  if (job === "backfill-benchmarks" || job === "backfill-traded-prices") {
+    if (!startDate || !isValidDate(startDate)) {
+      return NextResponse.json({ error: "startDate must be YYYY-MM-DD" }, { status: 400 });
+    }
+    if (startDate > targetDate) {
+      return NextResponse.json(
+        { error: "startDate must be on or before date" },
+        { status: 400 },
+      );
+    }
+  }
 
   try {
     if (job === "run-daily") {
       const result = await runDailyPipeline(targetDate);
       return NextResponse.json({ ok: true, job, targetDate, result });
+    }
+
+    if (job === "backfill-benchmarks") {
+      const result = await ensureBenchmarkHistory(targetDate, { startDate });
+      return NextResponse.json({
+        ok: true,
+        job,
+        targetDate,
+        startDate,
+        result: { benchmarks: result },
+      });
+    }
+
+    if (job === "backfill-traded-prices") {
+      const result = await backfillTradedInstrumentPrices(targetDate, { startDate });
+      return NextResponse.json({
+        ok: true,
+        job,
+        targetDate,
+        startDate,
+        result: { tradedPrices: result },
+      });
     }
 
     const result = await generateSnapshotsForDate(targetDate);

@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 type Props = {
   portfolioId: string;
   studyCallOptions: Array<{ id: number; label: string }>;
+  onSubmitted?: () => Promise<void> | void;
 };
 
 type Market = "KR" | "US" | "INDEX";
@@ -132,7 +133,7 @@ function translateTradeError(message: string, context?: { symbol?: string; marke
   return message;
 }
 
-export function TradeEntryForm({ portfolioId, studyCallOptions }: Props) {
+export function TradeEntryForm({ portfolioId, studyCallOptions, onSubmitted }: Props) {
   const router = useRouter();
   const [symbol, setSymbol] = useState("");
   const [market, setMarket] = useState<Market>("KR");
@@ -508,7 +509,11 @@ export function TradeEntryForm({ portfolioId, studyCallOptions }: Props) {
       setNote("");
       setSourceIdeaId("");
       if (side !== "CLOSE") setQuantity("1");
-      router.refresh();
+      if (onSubmitted) {
+        await onSubmitted();
+      } else {
+        router.refresh();
+      }
     } catch (err) {
       setError(
         translateTradeError(err instanceof Error ? err.message : "Unknown error", {

@@ -1,8 +1,9 @@
+import { HomeMissingPriceLink } from "@/components/home-missing-price-link";
+import { LazyLeaderboardInstrumentsPanel } from "@/components/lazy-leaderboard-instruments-panel";
 import Link from "next/link";
-import { LeaderboardInstrumentsTable } from "@/components/leaderboard-instruments-table";
 import { LeaderboardTable } from "@/components/leaderboard-table";
 import { RankToggle } from "@/components/rank-toggle";
-import { fetchLeaderboard, fetchMissingPriceOverview } from "@/lib/queries";
+import { fetchLeaderboard } from "@/lib/queries";
 
 export const dynamic = "force-dynamic";
 
@@ -12,10 +13,7 @@ export default async function Home({
   searchParams?: { rank?: string };
 }) {
   const rank = searchParams?.rank === "sharpe" ? "sharpe" : "return";
-  const [{ date, rows, instrumentRows }, missingPriceOverview] = await Promise.all([
-    fetchLeaderboard(rank),
-    fetchMissingPriceOverview(),
-  ]);
+  const { date, rows } = await fetchLeaderboard(rank);
   const leader = [...rows].sort((a, b) => b.total_return_pct - a.total_return_pct)[0] ?? null;
   const avgReturn =
     rows.length > 0
@@ -107,27 +105,11 @@ export default async function Home({
 
       <LeaderboardTable rows={rows} rankBy={rank} />
 
-      <details className="panel overflow-hidden">
-        <summary className="cursor-pointer px-4 py-3 text-sm font-semibold text-slate-900">
-          고급 보기: 종목별 비중/수익 상위 현황
-        </summary>
-        <div className="border-t border-slate-200">
-          <LeaderboardInstrumentsTable rows={instrumentRows} />
-        </div>
-      </details>
+      <LazyLeaderboardInstrumentsPanel rank={rank} />
 
       <div className="px-1 text-right">
         <div className="flex flex-wrap items-center justify-end gap-3 text-xs">
-          <Link
-            href="/admin/missing-prices"
-            className={`hover:underline ${
-              missingPriceOverview.uniqueCount > 0
-                ? "font-medium text-rose-600 hover:text-rose-700"
-                : "text-slate-400 hover:text-slate-600"
-            }`}
-          >
-            전체 미조회 종목 {missingPriceOverview.uniqueCount}개
-          </Link>
+          <HomeMissingPriceLink />
           <Link href="/admin/jobs" className="text-slate-400 hover:text-slate-600 hover:underline">
             운영자용 업데이트 도구
           </Link>

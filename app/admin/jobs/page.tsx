@@ -1,10 +1,15 @@
 import Link from "next/link";
 import { ManualJobsPanel } from "@/components/manual-jobs-panel";
+import { getGameStartDate } from "@/lib/db";
 import { todayInSeoul } from "@/lib/time";
 
 export const dynamic = "force-dynamic";
 
-export default function AdminJobsPage() {
+export default async function AdminJobsPage() {
+  const today = todayInSeoul();
+  const benchmarkStartDate = `${String(Number(today.slice(0, 4)) - 1)}-10-01`;
+  const tradedPriceStartDate = await getGameStartDate();
+
   return (
     <main className="space-y-5">
       <header className="panel p-5">
@@ -20,8 +25,10 @@ export default function AdminJobsPage() {
       </header>
 
       <ManualJobsPanel
-        defaultDailyDate={todayInSeoul()}
-        defaultSnapshotDate={todayInSeoul()}
+        defaultDailyDate={today}
+        defaultSnapshotDate={today}
+        defaultBenchmarkStartDate={benchmarkStartDate}
+        defaultTradedPriceStartDate={tradedPriceStartDate}
       />
     </main>
   );

@@ -135,7 +135,7 @@ export class PythonMarketDataProvider implements MarketDataProvider {
 
     if (typeof parsed.date !== "string") return null;
     const close = Number(parsed.close);
-    if (!Number.isFinite(close)) return null;
+    if (!Number.isFinite(close) || close <= 0) return null;
     return { date: parsed.date, close };
   }
 
@@ -150,6 +150,6 @@ export class PythonMarketDataProvider implements MarketDataProvider {
       date,
     ]);
     const rate = Number(parsed.rate);
-    return Number.isFinite(rate) ? rate : null;
+    return Number.isFinite(rate) && rate > 0 ? rate : null;
   }
 }

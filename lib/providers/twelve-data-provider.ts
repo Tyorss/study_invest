@@ -95,7 +95,7 @@ function parseDailyClosePointOnOrBefore(
     if (!rowDate) continue;
     if (rowDate > targetDate) continue;
     const close = Number(row.close);
-    if (Number.isFinite(close)) {
+    if (Number.isFinite(close) && close > 0) {
       return { date: rowDate, close };
     }
   }

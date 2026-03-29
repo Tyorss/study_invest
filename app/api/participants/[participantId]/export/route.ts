@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { getGameStartDate, getParticipantSnapshots } from "@/lib/db";
 import { fetchParticipantDetail } from "@/lib/queries";
 
 export const dynamic = "force-dynamic";
@@ -40,7 +41,9 @@ export async function GET(
     note: t.note ?? "",
   }));
 
-  const snapshots = data.snapshots.map((s: any) => ({
+  const gameStartDate = await getGameStartDate();
+  const snapshotRows = await getParticipantSnapshots(params.participantId, gameStartDate);
+  const snapshots = snapshotRows.map((s: any) => ({
     date: s.date,
     nav_krw: s.nav_krw,
     cash_krw: s.cash_krw,

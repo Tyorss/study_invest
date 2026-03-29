@@ -476,7 +476,6 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
   const [composerOpen, setComposerOpen] = useState(false);
   const [draft, setDraft] = useState<Draft>(emptyDraft(initialComposer));
   const [isSaving, setIsSaving] = useState(false);
-  const [, setIsRefreshingQuotes] = useState(false);
   const [busyId, setBusyId] = useState<number | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -573,6 +572,25 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
     return `${selectedIdea.source_session.industry_name} · ${selectedIdea.source_session.presenter}`;
   }, [selectedIdea]);
 
+  function mergeIdeaFromApi(nextIdea: StudyTrackerIdea, previousIdea?: StudyTrackerIdea | null) {
+    if (!previousIdea) return nextIdea;
+    return {
+      ...previousIdea,
+      ...nextIdea,
+      source_session: nextIdea.source_session ?? previousIdea.source_session,
+      source_coverage: nextIdea.source_coverage ?? previousIdea.source_coverage,
+      feedbacks: nextIdea.feedbacks.length > 0 ? nextIdea.feedbacks : previousIdea.feedbacks,
+      updates: nextIdea.updates.length > 0 ? nextIdea.updates : previousIdea.updates,
+      linked_trades:
+        nextIdea.linked_trades.length > 0 ? nextIdea.linked_trades : previousIdea.linked_trades,
+      feedback_count: nextIdea.feedback_count > 0 ? nextIdea.feedback_count : previousIdea.feedback_count,
+      update_count: nextIdea.update_count > 0 ? nextIdea.update_count : previousIdea.update_count,
+      linked_trade_count:
+        nextIdea.linked_trade_count > 0 ? nextIdea.linked_trade_count : previousIdea.linked_trade_count,
+      adoption_count: nextIdea.adoption_count > 0 ? nextIdea.adoption_count : previousIdea.adoption_count,
+    };
+  }
+
   function updateDraft<K extends keyof Draft>(key: K, value: Draft[K]) {
     setDraft((prev) => ({ ...prev, [key]: value }));
   }
@@ -638,10 +656,11 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
       if (!res.ok || !json.ok || !json.idea) {
         throw new Error(json.error ?? `Failed to update idea (HTTP ${res.status})`);
       }
-      setIdeas((prev) => prev.map((row) => (row.id === json.idea!.id ? json.idea! : row)));
+      setIdeas((prev) =>
+        prev.map((row) => (row.id === json.idea!.id ? mergeIdeaFromApi(json.idea!, row) : row)),
+      );
       setSelectedIdeaId(json.idea.id);
       setMessage(json.warning ? `${successMessage} ${json.warning}` : successMessage);
-      router.refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to update idea");
     } finally {
@@ -651,7 +670,6 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
 
   async function refreshIdeas(targetIdeas: StudyTrackerIdea[], successMessage: string) {
     if (targetIdeas.length === 0) return;
-    setIsRefreshingQuotes(true);
     setMessage(null);
     setError(null);
 
@@ -673,15 +691,18 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
         if (json.warning) warnings.push(`${idea.ticker}: ${json.warning}`);
       }
 
-      setIdeas((prev) => prev.map((idea) => updated.get(idea.id) ?? idea));
+      setIdeas((prev) =>
+        prev.map((idea) => {
+          const refreshed = updated.get(idea.id);
+          return refreshed ? mergeIdeaFromApi(refreshed, idea) : idea;
+        }),
+      );
       const warningSuffix =
         warnings.length > 0 ? ` Warnings: ${warnings.slice(0, 2).join(" | ")}` : "";
       setMessage(`${successMessage}${warningSuffix}`);
-      router.refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to refresh live prices");
     } finally {
-      setIsRefreshingQuotes(false);
     }
   }
 
@@ -772,12 +793,13 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
       }
       setIdeas((prev) => {
         if (editingId === null) return [json.idea!, ...prev];
-        return prev.map((idea) => (idea.id === json.idea!.id ? json.idea! : idea));
+        return prev.map((idea) =>
+          idea.id === json.idea!.id ? mergeIdeaFromApi(json.idea!, idea) : idea,
+        );
       });
       setSelectedIdeaId(json.idea.id);
       setMessage(json.warning ? `Call saved. ${json.warning}` : editingId === null ? "Call added." : "Call updated.");
       closeComposer();
-      router.refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save call");
     } finally {
@@ -804,7 +826,6 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
       if (editingId === idea.id) closeComposer();
       setMenuIdeaId(null);
       setMessage("콜을 삭제했습니다.");
-      router.refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to delete call");
     } finally {
@@ -828,13 +849,44 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
           note: feedbackNote.trim() || null,
         }),
       });
-      const json = await readApiResponse<{ ok?: boolean; error?: string }>(res);
-      if (!res.ok || !json.ok) {
+      const json = await readApiResponse<{
+        ok?: boolean;
+        error?: string;
+        feedback?: {
+          id: number;
+          participant_id: string;
+          stance: StudyCallFeedbackStance;
+          note: string | null;
+          created_at: string;
+        };
+      }>(res);
+      if (!res.ok || !json.ok || !json.feedback) {
         throw new Error(json.error ?? `Failed to save feedback (HTTP ${res.status})`);
       }
+      const participantName =
+        data.participants.find((participant) => participant.id === json.feedback!.participant_id)?.name ??
+        json.feedback.participant_id;
+      setIdeas((prev) =>
+        prev.map((idea) => {
+          if (idea.id !== selectedIdea.id) return idea;
+          const nextFeedbacks = [
+            {
+              ...json.feedback!,
+              participant_name: participantName,
+            },
+            ...idea.feedbacks.filter(
+              (feedback) => feedback.participant_id !== json.feedback!.participant_id,
+            ),
+          ].sort((a, b) => b.created_at.localeCompare(a.created_at));
+          return {
+            ...idea,
+            feedbacks: nextFeedbacks,
+            feedback_count: nextFeedbacks.length,
+          };
+        }),
+      );
       setFeedbackNote("");
       setMessage("의견을 저장했습니다.");
-      router.refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save feedback");
     } finally {
@@ -859,16 +911,39 @@ export function StudyTrackerBoard({ data, initialComposer = null }: Props) {
           created_by: updateAuthor.trim() || null,
         }),
       });
-      const json = await readApiResponse<{ ok?: boolean; error?: string }>(res);
-      if (!res.ok || !json.ok) {
+      const json = await readApiResponse<{
+        ok?: boolean;
+        error?: string;
+        update?: {
+          id: number;
+          update_type: StudyCallUpdateType;
+          title: string | null;
+          body: string;
+          created_by: string | null;
+          created_at: string;
+        };
+      }>(res);
+      if (!res.ok || !json.ok || !json.update) {
         throw new Error(json.error ?? `Failed to save update (HTTP ${res.status})`);
       }
+      setIdeas((prev) =>
+        prev.map((idea) => {
+          if (idea.id !== selectedIdea.id) return idea;
+          const nextUpdates = [json.update!, ...idea.updates].sort((a, b) =>
+            b.created_at.localeCompare(a.created_at),
+          );
+          return {
+            ...idea,
+            updates: nextUpdates,
+            update_count: nextUpdates.length,
+          };
+        }),
+      );
       setUpdateType("update");
       setUpdateTitle("");
       setUpdateBody("");
       setUpdateAuthor("");
       setMessage("업데이트를 저장했습니다.");
-      router.refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save update");
     } finally {

@@ -151,6 +151,7 @@ export async function getPricePointOnOrBefore(
     .from("prices")
     .select("date, close, source")
     .eq("instrument_id", instrumentId)
+    .gt("close", 0)
     .lte("date", date)
     .order("date", { ascending: false })
     .limit(1)
@@ -181,6 +182,7 @@ export async function getFxPointOnOrBefore(
     .from("fx_rates")
     .select("date, rate")
     .eq("pair", pair)
+    .gt("rate", 0)
     .lte("date", date)
     .order("date", { ascending: false })
     .limit(1)
@@ -407,7 +409,30 @@ export async function getLatestTradeDateForPortfolio(
   return data?.trade_date ? String(data.trade_date) : null;
 }
 
+export async function getFirstTradeDateForPortfolio(
+  portfolioId: string,
+): Promise<string | null> {
+  const supabase = getAdminSupabase();
+  const { data, error } = await supabase
+    .from("trades")
+    .select("trade_date")
+    .eq("portfolio_id", portfolioId)
+    .order("trade_date", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  return data?.trade_date ? String(data.trade_date) : null;
+}
+
 export async function getBenchmarkPriceSeries(
+  instrumentId: string,
+  fromDate: string,
+  toDate: string,
+) {
+  return getPriceSeries(instrumentId, fromDate, toDate);
+}
+
+export async function getPriceSeries(
   instrumentId: string,
   fromDate: string,
   toDate: string,
@@ -422,6 +447,31 @@ export async function getBenchmarkPriceSeries(
     .order("date", { ascending: true });
   if (error) throw error;
   return data ?? [];
+}
+
+export async function getTradedInstrumentsThroughDate(endDate: string) {
+  const supabase = getAdminSupabase();
+  const { data, error } = await supabase
+    .from("trades")
+    .select("instrument_id, instruments!inner(*)")
+    .lte("trade_date", endDate)
+    .order("trade_date", { ascending: true });
+  if (error) throw error;
+
+  const byId = new Map<string, Instrument>();
+  for (const row of (data ?? []) as Array<{
+    instrument_id: string;
+    instruments: Instrument | Instrument[] | null;
+  }>) {
+    const instrument = Array.isArray(row.instruments)
+      ? row.instruments[0] ?? null
+      : row.instruments;
+    if (!row.instrument_id || !instrument) continue;
+    if (!byId.has(row.instrument_id)) {
+      byId.set(row.instrument_id, instrument);
+    }
+  }
+  return [...byId.values()];
 }
 
 export async function getBenchmarkByCode(code: "SPY" | "KOSPI") {
@@ -598,6 +648,42 @@ export async function getStudyTrackerIdeas(): Promise<StudyTrackerIdeaRow[]> {
     throw toErrorWithMessage(error, "Failed to read study tracker ideas");
   }
   return (data ?? []) as StudyTrackerIdeaRow[];
+}
+
+export async function getStudyTrackerIdeaRefs(): Promise<
+  Array<Pick<StudyTrackerIdeaRow, "id" | "ticker" | "company_name" | "presenter" | "presented_at">>
+> {
+  const supabase = getAdminSupabase();
+  const { data, error } = await supabase
+    .from("study_tracker_ideas")
+    .select("id, ticker, company_name, presenter, presented_at")
+    .order("presented_at", { ascending: false, nullsFirst: false })
+    .order("id", { ascending: false });
+  if (error) {
+    throw toErrorWithMessage(error, "Failed to read study tracker idea refs");
+  }
+  return (data ?? []) as Array<
+    Pick<StudyTrackerIdeaRow, "id" | "ticker" | "company_name" | "presenter" | "presented_at">
+  >;
+}
+
+export async function getStudyTrackerIdeaRefsByIds(
+  ideaIds: number[],
+): Promise<
+  Array<Pick<StudyTrackerIdeaRow, "id" | "ticker" | "company_name" | "presenter" | "presented_at">>
+> {
+  if (ideaIds.length === 0) return [];
+  const supabase = getAdminSupabase();
+  const { data, error } = await supabase
+    .from("study_tracker_ideas")
+    .select("id, ticker, company_name, presenter, presented_at")
+    .in("id", ideaIds);
+  if (error) {
+    throw toErrorWithMessage(error, "Failed to read study tracker idea refs by ids");
+  }
+  return (data ?? []) as Array<
+    Pick<StudyTrackerIdeaRow, "id" | "ticker" | "company_name" | "presenter" | "presented_at">
+  >;
 }
 
 export async function getStudyTrackerIdeaById(ideaId: number): Promise<StudyTrackerIdeaRow | null> {

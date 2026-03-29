@@ -122,7 +122,7 @@ function parseClosePointOnOrBefore(
   for (let i = n - 1; i >= 0; i -= 1) {
     const epoch = Number(ts[i]);
     const c = Number(close[i]);
-    if (!Number.isFinite(epoch) || !Number.isFinite(c)) continue;
+    if (!Number.isFinite(epoch) || !Number.isFinite(c) || c <= 0) continue;
     const d = dateInTimeZone(epoch * 1000, exchangeTz);
     if (d <= targetDate) {
       return { date: d, close: c };
@@ -148,7 +148,7 @@ export class YahooMarketDataProvider implements MarketDataProvider {
         continue;
       }
       const point = parseClosePointOnOrBefore(json, date);
-      if (point !== null && Number.isFinite(point.close)) {
+      if (point !== null && Number.isFinite(point.close) && point.close > 0) {
         return point;
       }
       lastError = `[Yahoo] ${candidate}: no close on/before ${date}`;
@@ -167,7 +167,7 @@ export class YahooMarketDataProvider implements MarketDataProvider {
       throw new Error("[Yahoo] KRW=X: no response");
     }
     const close = parseClosePointOnOrBefore(json, date)?.close ?? null;
-    if (close === null || !Number.isFinite(close)) {
+    if (close === null || !Number.isFinite(close) || close <= 0) {
       throw new Error(`[Yahoo] KRW=X: no close on/before ${date}`);
     }
     return close;

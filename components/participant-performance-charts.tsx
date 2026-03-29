@@ -32,9 +32,11 @@ function clampDate(value: string, min: string, max: string) {
 export function ParticipantPerformanceCharts({
   firstTradeDate,
   participantId,
+  refreshToken = 0,
 }: {
   firstTradeDate: string | null;
   participantId: string;
+  refreshToken?: number;
 }) {
   const [data, setData] = useState<ChartPoint[]>([]);
   const [seriesLoading, setSeriesLoading] = useState(true);
@@ -57,7 +59,6 @@ export function ParticipantPerformanceCharts({
       try {
         const res = await fetch(`/api/participants/${participantId}/performance-series`, {
           method: "GET",
-          cache: "no-store",
         });
         const contentType = res.headers.get("content-type") ?? "";
         let json: SeriesResponse | null = null;
@@ -100,7 +101,7 @@ export function ParticipantPerformanceCharts({
     return () => {
       cancelled = true;
     };
-  }, [firstTradeDate, participantId]);
+  }, [firstTradeDate, participantId, refreshToken]);
 
   const filteredData = useMemo(() => {
     if (!startDate || !endDate) return data;

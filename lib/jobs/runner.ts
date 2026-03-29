@@ -10,11 +10,13 @@ import {
   getBenchmarkPriceSeries,
   getFxPointOnOrBefore,
   getInstrumentBySymbolMarket,
+  getPriceSeries,
   getGameStartDate,
   getParticipantsWithPortfolios,
   getPricePointOnOrBefore,
   getStudySessionCompanies,
   getStudyTrackerIdeas,
+  getTradedInstrumentsThroughDate,
   insertJobRun,
   upsertDailySnapshot,
   upsertFx,
@@ -52,6 +54,11 @@ function benchmarkHistorySeedStart(endDate: string) {
 function isWeekend(date: string) {
   const day = new Date(`${date}T00:00:00Z`).getUTCDay();
   return day === 0 || day === 6;
+}
+
+function hasPositiveClose(row: { close: string | number | null | undefined }) {
+  const close = Number(row.close);
+  return Number.isFinite(close) && close > 0;
 }
 
 async function logJob(
@@ -167,6 +174,59 @@ async function fetchFxFromProviderChain(
     }
   }
   return { rate: null, usedProvider: null, attempts, finalReason: last };
+}
+
+async function collectPriceHistoryBackfillInstruments(targetDate: string) {
+  const [tradedInstruments, studyIdeaRows, sessionCompanyRows] = await Promise.all([
+    getTradedInstrumentsThroughDate(targetDate),
+    getStudyTrackerIdeas(),
+    getStudySessionCompanies(),
+  ]);
+
+  const byId = new Map<string, Instrument>();
+  const unresolvedTargets: Array<{ ticker: string; market: string; source: string }> = [];
+
+  for (const instrument of tradedInstruments) {
+    byId.set(instrument.id, instrument);
+  }
+
+  const quoteTargets = new Map<string, { symbol: string; market: Instrument["market"] }>();
+
+  for (const row of studyIdeaRows) {
+    const target = resolveStudyQuoteTarget(row.ticker, row.currency);
+    if (!target) continue;
+    quoteTargets.set(`${target.market}:${target.symbol}`, {
+      symbol: target.symbol,
+      market: target.market,
+    });
+  }
+
+  for (const row of sessionCompanyRows) {
+    const target = resolveStudyQuoteTarget(row.ticker, row.currency);
+    if (!target) continue;
+    quoteTargets.set(`${target.market}:${target.symbol}`, {
+      symbol: target.symbol,
+      market: target.market,
+    });
+  }
+
+  for (const target of quoteTargets.values()) {
+    const instrument = await getInstrumentBySymbolMarket(target.symbol, target.market);
+    if (instrument) {
+      byId.set(instrument.id, instrument);
+    } else {
+      unresolvedTargets.push({
+        ticker: target.symbol,
+        market: target.market,
+        source: "study_or_free_idea",
+      });
+    }
+  }
+
+  return {
+    instruments: [...byId.values()],
+    unresolvedTargets,
+  };
 }
 
 export async function updatePricesForDate(targetDate: string) {
@@ -404,7 +464,10 @@ export async function updateFxForDate(targetDate: string) {
   }
 }
 
-export async function ensureBenchmarkHistory(targetDate: string) {
+export async function ensureBenchmarkHistory(
+  targetDate: string,
+  options?: { startDate?: string },
+) {
   try {
     const requestedProviderRaw = buildRequestedProviderRaw();
     const providerResolution = resolveMarketDataProviders();
@@ -424,7 +487,7 @@ export async function ensureBenchmarkHistory(targetDate: string) {
       };
     }
 
-    const startDate = benchmarkHistorySeedStart(targetDate);
+    const startDate = options?.startDate ?? benchmarkHistorySeedStart(targetDate);
     const weekdays = dateRange(startDate, targetDate).filter((date) => !isWeekend(date));
     const rows: Array<{
       instrument_id: string;
@@ -441,7 +504,7 @@ export async function ensureBenchmarkHistory(targetDate: string) {
       const prices = await getBenchmarkPriceSeries(instrument.id, startDate, targetDate);
       existingByInstrument.set(
         instrument.id,
-        new Set(prices.map((row) => String(row.date))),
+        new Set(prices.filter(hasPositiveClose).map((row) => String(row.date))),
       );
     }
 
@@ -558,6 +621,172 @@ export async function ensureBenchmarkHistory(targetDate: string) {
       rows: 0,
       warnings: [] as Array<{ symbol: string; date: string; reason: string }>,
       failures: [{ symbol: "*", date: targetDate, reason: msg }],
+    };
+  }
+}
+
+export async function backfillTradedInstrumentPrices(
+  targetDate: string,
+  options?: { startDate?: string },
+) {
+  try {
+    const requestedProviderRaw = buildRequestedProviderRaw();
+    const providerResolution = resolveMarketDataProviders();
+    const startDate = options?.startDate ?? (await getGameStartDate());
+    const { instruments, unresolvedTargets } =
+      await collectPriceHistoryBackfillInstruments(targetDate);
+
+    if (instruments.length === 0) {
+      return {
+        status: "success" as const,
+        startDate,
+        rows: 0,
+        warnings: [] as Array<{ symbol: string; date: string; reason: string }>,
+        failures: [] as Array<{ symbol: string; date: string; reason: string }>,
+        instrumentCount: 0,
+        unresolvedTargets: 0,
+      };
+    }
+
+    const weekdays = dateRange(startDate, targetDate).filter((date) => !isWeekend(date));
+    const rows: Array<{
+      instrument_id: string;
+      date: string;
+      close: number;
+      source: string;
+    }> = [];
+    const warnings: Array<{ symbol: string; date: string; reason: string }> = [];
+    const failures: Array<{ symbol: string; date: string; reason: string }> = [];
+    const providerUsage: Record<string, number> = {};
+
+    const existingByInstrument = new Map<string, Set<string>>();
+    for (const instrument of instruments) {
+      const prices = await getPriceSeries(instrument.id, startDate, targetDate);
+      existingByInstrument.set(
+        instrument.id,
+        new Set(prices.filter(hasPositiveClose).map((row) => String(row.date))),
+      );
+    }
+
+    for (const instrument of instruments) {
+      const existingDates = existingByInstrument.get(instrument.id) ?? new Set<string>();
+
+      for (const date of weekdays) {
+        if (existingDates.has(date)) continue;
+
+        const storedPoint = await getPricePointOnOrBefore(instrument.id, date);
+        const live = await fetchPriceFromProviderChain(
+          providerResolution.handles,
+          instrument,
+          date,
+        );
+        const livePoint = live.point
+          ? {
+              ...live.point,
+              source: "provider",
+            }
+          : null;
+        const preferredPoint = pickPreferredClosePoint(date, storedPoint, livePoint);
+
+        if (!preferredPoint) {
+          failures.push({
+            symbol: instrument.symbol,
+            date,
+            reason: live.finalReason ?? "No provider data and no historical fallback",
+          });
+          continue;
+        }
+
+        const usingLivePoint = preferredPoint === livePoint;
+        const isExact = isExactPricePoint(preferredPoint, date);
+        if (usingLivePoint && live.usedProvider) {
+          providerUsage[live.usedProvider] = (providerUsage[live.usedProvider] ?? 0) + 1;
+        }
+
+        rows.push({
+          instrument_id: instrument.id,
+          date,
+          close: preferredPoint.close,
+          source: isExact
+            ? usingLivePoint
+              ? "provider"
+              : preferredPoint.source ?? "provider"
+            : "carry_forward",
+        });
+
+        if (!isExact) {
+          warnings.push({
+            symbol: instrument.symbol,
+            date,
+            reason:
+              live.finalReason ?? `${preferredPoint.date} 기준 종가를 사용했습니다.`,
+          });
+        }
+      }
+    }
+
+    if (rows.length > 0) {
+      await upsertPrice(
+        rows.map((row) => ({
+          instrument_id: row.instrument_id,
+          date: row.date,
+          close: String(row.close),
+          source: row.source,
+        })),
+      );
+    }
+
+    const totalMissing = rows.length + failures.length;
+    const status =
+      failures.length === 0 && warnings.length === 0
+        ? "success"
+        : failures.length < Math.max(totalMissing, 1)
+          ? "partial"
+          : "failed";
+
+    await logJob(
+      "backfill_traded_prices",
+      targetDate,
+      status,
+      {
+        start_date: startDate,
+        end_date: targetDate,
+        requested_provider: requestedProviderRaw,
+        configured_chain: providerResolution.handles.map((h) => h.requestedProvider),
+        invalid_provider_tokens: providerResolution.invalidValues,
+        instruments: instruments.map((instrument) => instrument.symbol),
+        instrument_count: instruments.length,
+        unresolved_targets: unresolvedTargets,
+        filled_rows: rows.length,
+        failures: failures.length,
+        warnings: warnings.length,
+        provider_usage: providerUsage,
+        warning_details: warnings,
+        failure_details: failures,
+      },
+      failures.length > 0 ? `Failed traded price dates: ${failures.length}` : null,
+    );
+
+    return {
+      status,
+      startDate,
+      rows: rows.length,
+      warnings,
+      failures,
+      instrumentCount: instruments.length,
+      unresolvedTargets: unresolvedTargets.length,
+    };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Unknown error";
+    await logJob("backfill_traded_prices", targetDate, "failed", { fatal: true }, msg);
+    return {
+      status: "failed" as const,
+      startDate: options?.startDate ?? (await getGameStartDate()),
+      rows: 0,
+      warnings: [] as Array<{ symbol: string; date: string; reason: string }>,
+      failures: [{ symbol: "*", date: targetDate, reason: msg }],
+      instrumentCount: 0,
+      unresolvedTargets: 0,
     };
   }
 }
@@ -933,7 +1162,9 @@ export async function refreshStudySessionCompaniesForDate(targetDate: string) {
 export async function runDailyPipeline(targetDate = todayInSeoul()) {
   const prices = await updatePricesForDate(targetDate);
   const fx = await updateFxForDate(targetDate);
-  const benchmarks = await ensureBenchmarkHistory(targetDate);
+  const benchmarks = await ensureBenchmarkHistory(targetDate, {
+    startDate: targetDate,
+  });
   const snapshots = await generateSnapshotsForDate(targetDate);
   const studyTracker = await refreshStudyTrackerIdeasForDate(targetDate);
   const freeTopics = await refreshStudySessionCompaniesForDate(targetDate);

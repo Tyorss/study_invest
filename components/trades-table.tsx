@@ -1,7 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useEffect, useMemo, useState } from "react";
 import { formatNum } from "@/lib/format";
 
 type TradeRow = {
@@ -64,20 +63,24 @@ function translateError(message: string) {
 }
 
 export function TradesTable({ rows }: { rows: TradeRow[] }) {
-  const router = useRouter();
+  const [localRows, setLocalRows] = useState(rows);
   const [busyId, setBusyId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [scope, setScope] = useState<"ALL" | "LINKED" | "INDEPENDENT">("ALL");
 
+  useEffect(() => {
+    setLocalRows(rows);
+  }, [rows]);
+
   const filteredRows = useMemo(() => {
     if (scope === "LINKED") {
-      return rows.filter((row) => row.source_idea_id !== null && row.source_idea_id !== undefined);
+      return localRows.filter((row) => row.source_idea_id !== null && row.source_idea_id !== undefined);
     }
     if (scope === "INDEPENDENT") {
-      return rows.filter((row) => row.source_idea_id === null || row.source_idea_id === undefined);
+      return localRows.filter((row) => row.source_idea_id === null || row.source_idea_id === undefined);
     }
-    return rows;
-  }, [rows, scope]);
+    return localRows;
+  }, [localRows, scope]);
 
   async function onEdit(row: TradeRow) {
     setError(null);
@@ -136,7 +139,20 @@ export function TradesTable({ rows }: { rows: TradeRow[] }) {
       if (!res.ok || !json.ok) {
         throw new Error(json.error ?? `Failed to update trade (HTTP ${res.status})`);
       }
-      router.refresh();
+      setLocalRows((prev) =>
+        prev.map((trade) =>
+          trade.id === row.id
+            ? {
+                ...trade,
+                trade_date: tradeDate,
+                side,
+                quantity: quantity ?? trade.quantity,
+                price,
+                note: noteInput.trim() || null,
+              }
+            : trade,
+        ),
+      );
     } catch (err) {
       const message = err instanceof Error ? err.message : "거래 수정에 실패했습니다.";
       setError(translateError(message));
@@ -159,7 +175,7 @@ export function TradesTable({ rows }: { rows: TradeRow[] }) {
       if (!res.ok || !json.ok) {
         throw new Error(json.error ?? `Failed to delete trade (HTTP ${res.status})`);
       }
-      router.refresh();
+      setLocalRows((prev) => prev.filter((trade) => trade.id !== row.id));
     } catch (err) {
       const message = err instanceof Error ? err.message : "거래 삭제에 실패했습니다.";
       setError(translateError(message));

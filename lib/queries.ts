@@ -5,11 +5,14 @@ import {
   getParticipantNotes,
   getParticipantById,
   getStudySessionCompanies,
+  getStudyTrackerIdeaRefs,
+  getStudyTrackerIdeaRefsByIds,
   getStudyTrackerIdeas,
   getBenchmarkPriceSeries,
   getParticipantsWithPortfolios,
   getGameStartDate,
   getParticipantLatestSnapshot,
+  getFirstTradeDateForPortfolio,
   getLatestTradeDateForPortfolio,
   getParticipantSnapshots,
   getTradesForPortfolio,
@@ -17,17 +20,8 @@ import {
   getPriceOnOrBefore,
   getTradesJournal,
   getFxOnOrBefore,
-  updateInstrumentMetadata,
-  upsertPrice,
 } from "@/lib/db";
 import { createValueCache, rebuildPortfolioState } from "@/lib/engine/snapshot";
-import {
-  fetchBestClosePointFromProviderChain,
-  isExactPricePoint,
-  pickPreferredClosePoint,
-} from "@/lib/market-data";
-import { resolveMarketDataProviders } from "@/lib/providers";
-import { lookupInstrumentNameWithPython } from "@/lib/providers/python-market-data-provider";
 import { addDays, dateRange } from "@/lib/time";
 import type {
   Instrument,
@@ -69,136 +63,247 @@ function resolveUsableMarkPrice(price: number | null, fallback: number) {
   return { value: price as number, isFallback: false };
 }
 
-function defaultProviderSymbol(symbol: string, market: Market) {
-  if (market === "KR") return `${symbol}:KRX`;
-  if (market === "INDEX" && symbol === "KS11") return "KOSPI";
-  return symbol;
-}
+type StudyIdeaRef = {
+  id: number;
+  ticker: string;
+  company_name: string;
+  presenter: string;
+  presented_at: string | null;
+};
 
-function benchmarkHistorySeedStart(endDate: string) {
-  return `${String(Number(endDate.slice(0, 4)) - 1)}-10-01`;
-}
-
-async function getUsableInstrumentPricePoint(
-  instrument: Instrument,
-  date: string,
-): Promise<{ close: number | null; isFallback: boolean; refreshed: boolean }> {
-  const storedPoint = await getPricePointOnOrBefore(instrument.id, date);
-  if (isExactPricePoint(storedPoint, date) && Number(storedPoint?.close ?? 0) > 0) {
-    return { close: Number(storedPoint!.close), isFallback: false, refreshed: false };
-  }
-
-  let livePoint:
-    | {
-        date: string;
-        close: number;
-        source?: string | null;
-      }
-    | null = null;
-
-  try {
-    const providerResolution = resolveMarketDataProviders();
-    const live = await fetchBestClosePointFromProviderChain(providerResolution.handles, {
-      symbol: instrument.symbol,
-      market: instrument.market,
-      date,
-      providerSymbol: instrument.provider_symbol ?? defaultProviderSymbol(instrument.symbol, instrument.market),
-    });
-    if (live.point && Number.isFinite(live.point.close) && live.point.close > 0) {
-      livePoint = {
-        date: live.point.date,
-        close: live.point.close,
-        source: "provider",
-      };
-    }
-  } catch (err) {
-    const message = err instanceof Error ? err.message : "Unknown provider resolution error";
-    console.error(
-      `[participant-detail] single-price refresh failed for ${instrument.symbol} (${date}): ${message}`,
-    );
-  }
-
-  const preferredPoint = pickPreferredClosePoint(date, storedPoint, livePoint);
-  if (!preferredPoint || !Number.isFinite(preferredPoint.close) || preferredPoint.close <= 0) {
-    return { close: null, isFallback: true, refreshed: false };
-  }
-
-  const shouldPersist =
-    !storedPoint ||
-    preferredPoint.date > storedPoint.date ||
-    preferredPoint.close !== storedPoint.close ||
-    preferredPoint.source !== storedPoint.source;
-
-  if (shouldPersist) {
-    await upsertPrice([
+function mapTradesWithLinkedCalls(tradeRows: any[], studyIdeas: StudyIdeaRef[]) {
+  const ideaMap = new Map(
+    studyIdeas.map((idea) => [
+      idea.id,
       {
-        instrument_id: instrument.id,
-        date,
-        close: String(preferredPoint.close),
-        source:
-          preferredPoint.date === date
-            ? preferredPoint.source ?? "provider"
-            : "carry_forward",
+        id: idea.id,
+        ticker: idea.ticker,
+        company_name: idea.company_name,
+        presenter: idea.presenter,
+        presented_at: idea.presented_at,
       },
+    ]),
+  );
+
+  return tradeRows.map((trade: any) => ({
+    ...trade,
+    source_idea_id:
+      trade.source_idea_id === null || trade.source_idea_id === undefined
+        ? null
+        : Number(trade.source_idea_id),
+    linked_call:
+      trade.source_idea_id === null || trade.source_idea_id === undefined
+        ? null
+        : ideaMap.get(Number(trade.source_idea_id)) ?? null,
+  }));
+}
+
+async function buildParticipantSnapshotAndHoldings(params: {
+  participantId: string;
+  pair: Awaited<ReturnType<typeof getParticipantById>>;
+  latestSnapshot: Awaited<ReturnType<typeof getParticipantLatestSnapshot>>;
+  tradeRows: any[];
+}) {
+  const { participantId, pair, latestSnapshot, tradeRows } = params;
+  if (!pair) return { latestSnapshot: null, holdings: [] as any[] };
+
+  const gameStartDate = await getGameStartDate();
+  const latestSnapshotDate = latestSnapshot?.date ? String(latestSnapshot.date) : null;
+  const latestTradeDate = tradeRows[0]?.trade_date ? String(tradeRows[0].trade_date) : null;
+  const valuationDate = [latestSnapshotDate, latestTradeDate]
+    .filter((x): x is string => Boolean(x))
+    .sort((a, b) => a.localeCompare(b))
+    .at(-1) ?? null;
+
+  const valuationCache = createValueCache();
+  let resolvedValuationDate = valuationDate;
+  let liveState: Awaited<ReturnType<typeof rebuildPortfolioState>> | null = null;
+  if (resolvedValuationDate) {
+    try {
+      liveState = await rebuildPortfolioState(
+        pair.portfolio,
+        pair.participant,
+        resolvedValuationDate,
+        valuationCache,
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Unknown valuation error";
+      console.error(
+        `[participant-detail] live valuation failed for ${participantId} (${resolvedValuationDate}): ${msg}`,
+      );
+      if (latestSnapshotDate && latestSnapshotDate !== resolvedValuationDate) {
+        try {
+          liveState = await rebuildPortfolioState(
+            pair.portfolio,
+            pair.participant,
+            latestSnapshotDate,
+            valuationCache,
+          );
+          resolvedValuationDate = latestSnapshotDate;
+        } catch (fallbackErr) {
+          const fallbackMsg =
+            fallbackErr instanceof Error ? fallbackErr.message : "Unknown fallback valuation error";
+          console.error(
+            `[participant-detail] fallback valuation failed for ${participantId} (${latestSnapshotDate}): ${fallbackMsg}`,
+          );
+          liveState = null;
+          resolvedValuationDate = latestSnapshotDate;
+        }
+      }
+    }
+  }
+
+  let holdings: any[] = [];
+  if (resolvedValuationDate && liveState) {
+    holdings = [];
+    for (const p of liveState.positions) {
+      const storedPoint = await getStoredInstrumentPricePoint(p.instrument, resolvedValuationDate);
+      const resolvedMark = resolveUsableMarkPrice(storedPoint.close, p.avg_cost_local);
+      const close = resolvedMark.value;
+      const fx =
+        p.instrument.currency === "USD"
+          ? await valuationCache.fxOnOrBefore(resolvedValuationDate)
+          : 1;
+      const fxRate = fx ?? 1;
+      const valueKrw = p.quantity * close * fxRate;
+      const pnlKrw = (close - p.avg_cost_local) * p.quantity * fxRate;
+      holdings.push({
+        symbol: p.instrument.symbol,
+        name: p.instrument.name,
+        market: p.instrument.market,
+        currency: p.instrument.currency,
+        quantity: p.quantity,
+        avg_cost_local: p.avg_cost_local,
+        mark_local: close,
+        price_unavailable: storedPoint.close === null || resolvedMark.isFallback,
+        value_krw: valueKrw,
+        unrealized_pnl_krw: pnlKrw,
+      });
+    }
+  }
+
+  let spy: Awaited<ReturnType<typeof getBenchmarkByCode>> = null;
+  let kospi: Awaited<ReturnType<typeof getBenchmarkByCode>> = null;
+  try {
+    [spy, kospi] = await Promise.all([
+      getBenchmarkByCode("SPY"),
+      getBenchmarkByCode("KOSPI"),
     ]);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Unknown benchmark error";
+    console.error(`[participant-detail] benchmark lookup failed: ${msg}`);
+  }
+
+  let spyByDate: Record<string, number | null> = {};
+  let kospiByDate: Record<string, number | null> = {};
+  const benchmarkEndDate = resolvedValuationDate ?? latestSnapshotDate;
+  if (benchmarkEndDate && spy && kospi) {
+    const [spyPrices, kospiPrices] = await Promise.all([
+      getBoundedBenchmarkPrices(spy, gameStartDate, benchmarkEndDate),
+      getBoundedBenchmarkPrices(kospi, gameStartDate, benchmarkEndDate),
+    ]);
+    spyByDate = buildBenchmarkReturnByDate(
+      "SPY",
+      gameStartDate,
+      benchmarkEndDate,
+      spyPrices,
+    ).returnByDate;
+    kospiByDate = buildBenchmarkReturnByDate(
+      "KOSPI",
+      gameStartDate,
+      benchmarkEndDate,
+      kospiPrices,
+    ).returnByDate;
+  }
+
+  let normalizedLatestSnapshot: any = null;
+  if (resolvedValuationDate && liveState) {
+    const startingCash = Number(pair.participant.starting_cash_krw);
+    const totalReturn = startingCash === 0 ? 0 : liveState.nav_krw / startingCash - 1;
+    const spyReturn = spyByDate[resolvedValuationDate] ?? null;
+    const kospiReturn = kospiByDate[resolvedValuationDate] ?? null;
+    const alphaSpy = spyReturn === null ? null : totalReturn - spyReturn;
+    const alphaKospi = kospiReturn === null ? null : totalReturn - kospiReturn;
+    const isOfficialSnapshotDate =
+      latestSnapshot !== null && latestSnapshotDate === resolvedValuationDate;
+
+    normalizedLatestSnapshot = {
+      ...latestSnapshot,
+      date: resolvedValuationDate,
+      nav_krw: liveState.nav_krw,
+      cash_krw: liveState.cash_krw,
+      holdings_value_krw: liveState.holdings_value_krw,
+      realized_pnl_krw: liveState.realized_pnl_krw,
+      unrealized_pnl_krw: liveState.unrealized_pnl_krw,
+      total_return_pct: totalReturn,
+      spy_return_pct: spyReturn,
+      kospi_return_pct: kospiReturn,
+      alpha_spy_pct: alphaSpy,
+      alpha_kospi_pct: alphaKospi,
+      sharpe_252:
+        isOfficialSnapshotDate && latestSnapshot ? toNumOrNull(latestSnapshot.sharpe_252) : null,
+      vol_ann_252:
+        isOfficialSnapshotDate && latestSnapshot ? toNumOrNull(latestSnapshot.vol_ann_252) : null,
+      mdd_to_date:
+        isOfficialSnapshotDate && latestSnapshot ? Number(latestSnapshot.mdd_to_date) : null,
+      beta_spy_252:
+        isOfficialSnapshotDate && latestSnapshot ? toNumOrNull(latestSnapshot.beta_spy_252) : null,
+      beta_kospi_252:
+        isOfficialSnapshotDate && latestSnapshot
+          ? toNumOrNull(latestSnapshot.beta_kospi_252)
+          : null,
+    };
+  } else if (latestSnapshot) {
+    const latestDateKey = latestSnapshot.date as string;
+    const totalReturn = Number(latestSnapshot.total_return_pct);
+    const spyReturn =
+      toNumOrNull(latestSnapshot.spy_return_pct) ?? (spyByDate[latestDateKey] ?? null);
+    const kospiReturn =
+      toNumOrNull(latestSnapshot.kospi_return_pct) ?? (kospiByDate[latestDateKey] ?? null);
+    const alphaSpyRaw = toNumOrNull(latestSnapshot.alpha_spy_pct);
+    const alphaKospiRaw = toNumOrNull(latestSnapshot.alpha_kospi_pct);
+    const alphaSpy = alphaSpyRaw ?? (spyReturn === null ? null : totalReturn - spyReturn);
+    const alphaKospi =
+      alphaKospiRaw ?? (kospiReturn === null ? null : totalReturn - kospiReturn);
+
+    normalizedLatestSnapshot = {
+      ...latestSnapshot,
+      nav_krw: Number(latestSnapshot.nav_krw),
+      cash_krw: Number(latestSnapshot.cash_krw),
+      holdings_value_krw: Number(latestSnapshot.holdings_value_krw),
+      realized_pnl_krw: Number(latestSnapshot.realized_pnl_krw),
+      unrealized_pnl_krw: Number(latestSnapshot.unrealized_pnl_krw),
+      total_return_pct: totalReturn,
+      spy_return_pct: spyReturn,
+      kospi_return_pct: kospiReturn,
+      alpha_spy_pct: alphaSpy,
+      alpha_kospi_pct: alphaKospi,
+      sharpe_252: toNumOrNull(latestSnapshot.sharpe_252),
+      vol_ann_252: toNumOrNull(latestSnapshot.vol_ann_252),
+      mdd_to_date: Number(latestSnapshot.mdd_to_date),
+      beta_spy_252: toNumOrNull(latestSnapshot.beta_spy_252),
+      beta_kospi_252: toNumOrNull(latestSnapshot.beta_kospi_252),
+    };
   }
 
   return {
-    close: preferredPoint.close,
-    isFallback: preferredPoint.date !== date,
-    refreshed: shouldPersist,
+    latestSnapshot: normalizedLatestSnapshot,
+    holdings,
   };
 }
 
-async function resolveCanonicalKrInstrumentName(instrument: Instrument): Promise<string | null> {
-  if (instrument.market !== "KR" || !/^\d{6}$/.test(instrument.symbol)) {
-    return null;
+async function getStoredInstrumentPricePoint(
+  instrument: Instrument,
+  date: string,
+): Promise<{ close: number | null; isFallback: boolean }> {
+  const storedPoint = await getPricePointOnOrBefore(instrument.id, date);
+  if (!storedPoint || !Number.isFinite(Number(storedPoint.close)) || Number(storedPoint.close) <= 0) {
+    return { close: null, isFallback: true };
   }
-
-  try {
-    const name = await lookupInstrumentNameWithPython(
-      "fdr",
-      instrument.symbol,
-      instrument.market,
-      instrument.provider_symbol ?? defaultProviderSymbol(instrument.symbol, instrument.market),
-    );
-    return name?.trim() || null;
-  } catch (err) {
-    const message = err instanceof Error ? err.message : "Unknown instrument name lookup error";
-    console.error(
-      `[instrument-name] failed to resolve ${instrument.symbol}: ${message}`,
-    );
-    return null;
-  }
-}
-
-function isSuspiciousKrInstrumentName(instrument: Instrument) {
-  if (instrument.market !== "KR" || !/^\d{6}$/.test(instrument.symbol)) return false;
-  const name = instrument.name?.trim() ?? "";
-  if (!name) return true;
-  if (name === instrument.symbol) return true;
-  if (/[A-Za-z]/.test(name) && !/[가-힣]/.test(name)) return true;
-  return false;
-}
-
-async function repairKoreanInstrumentMetadata(instruments: Instrument[]) {
-  const unique = new Map<string, Instrument>();
-  for (const instrument of instruments) {
-    if (!isSuspiciousKrInstrumentName(instrument)) continue;
-    unique.set(instrument.id, instrument);
-  }
-
-  const repairedNames = new Map<string, string>();
-  for (const instrument of unique.values()) {
-    const canonicalName = await resolveCanonicalKrInstrumentName(instrument);
-    if (!canonicalName) continue;
-    repairedNames.set(instrument.id, canonicalName);
-    if (canonicalName !== instrument.name) {
-      await updateInstrumentMetadata(instrument.id, { name: canonicalName });
-    }
-  }
-
-  return repairedNames;
+  return {
+    close: Number(storedPoint.close),
+    isFallback: storedPoint.date !== date,
+  };
 }
 
 async function buildParticipantChartSeries(params: {
@@ -294,8 +399,10 @@ async function buildParticipantChartSeries(params: {
 
     let holdingsValueKrw = 0;
     for (const pos of positions.values()) {
-      const usablePoint = await getUsableInstrumentPricePoint(pos.instrument, date);
-      const mark = resolveUsableMarkPrice(usablePoint.close, pos.avg_cost_local).value;
+      const mark = resolveUsableMarkPrice(
+        await cache.priceOnOrBefore(pos.instrument.id, date),
+        pos.avg_cost_local,
+      ).value;
       const fx =
         pos.instrument.currency === "USD"
           ? await cache.fxOnOrBefore(date)
@@ -317,15 +424,21 @@ async function buildParticipantChartSeries(params: {
   return out;
 }
 
-async function ensureBenchmarkRowsForDates(instrument: Instrument, dates: string[]) {
-  if (dates.length === 0) return false;
+async function getBoundedBenchmarkPrices(instrument: Instrument, startDate: string, endDate: string) {
+  const [startPoint, rangeRows] = await Promise.all([
+    getPricePointOnOrBefore(instrument.id, startDate),
+    getBenchmarkPriceSeries(instrument.id, startDate, endDate),
+  ]);
 
-  let refreshed = false;
-  for (const date of dates) {
-    const usablePoint = await getUsableInstrumentPricePoint(instrument, date);
-    if (usablePoint.refreshed) refreshed = true;
+  if (
+    startPoint &&
+    startPoint.date < startDate &&
+    !rangeRows.some((row) => String(row.date) === String(startPoint.date))
+  ) {
+    return [{ date: startPoint.date, close: startPoint.close }, ...rangeRows];
   }
-  return refreshed;
+
+  return rangeRows;
 }
 
 async function computeTurnover20d(params: {
@@ -371,7 +484,11 @@ async function computeTurnover20d(params: {
   return turnoverNotionalKrw / navKrw;
 }
 
-export async function fetchLeaderboard(sortBy: "return" | "sharpe" = "return") {
+export async function fetchLeaderboard(
+  sortBy: "return" | "sharpe" = "return",
+  options?: { includeInstrumentRows?: boolean },
+) {
+  const includeInstrumentRows = options?.includeInstrumentRows ?? false;
   const participantRows = await getParticipantsWithPortfolios();
   if (participantRows.length === 0) {
     return {
@@ -385,7 +502,6 @@ export async function fetchLeaderboard(sortBy: "return" | "sharpe" = "return") {
     participantRows.map(async (row) => ({
       ...row,
       latestSnapshot: await getParticipantLatestSnapshot(row.participant.id),
-      latestTradeDate: await getLatestTradeDateForPortfolio(row.portfolio.id),
     })),
   );
 
@@ -403,158 +519,83 @@ export async function fetchLeaderboard(sortBy: "return" | "sharpe" = "return") {
 
   const latestDate =
     withSnapshot
-      .map((x) =>
-        [String(x.latestSnapshot.date), x.latestTradeDate]
-          .filter((v): v is string => Boolean(v))
-          .sort((a, b) => a.localeCompare(b))
-          .at(-1),
-      )
+      .map((x) => String(x.latestSnapshot.date))
       .filter((v): v is string => Boolean(v))
       .sort((a, b) => a.localeCompare(b))
       .at(-1) ?? null;
+  const rows: LeaderboardRow[] = withSnapshot.map(({ participant, latestSnapshot }) => {
+    const navKrw = Number(latestSnapshot.nav_krw);
+    const cashKrw = Number(latestSnapshot.cash_krw);
+    const totalReturn = Number(latestSnapshot.total_return_pct);
+    const spyReturn = toNumOrNull(latestSnapshot.spy_return_pct);
+    const kospiReturn = toNumOrNull(latestSnapshot.kospi_return_pct);
+    const alphaSpyRaw = toNumOrNull(latestSnapshot.alpha_spy_pct);
+    const alphaKospiRaw = toNumOrNull(latestSnapshot.alpha_kospi_pct);
 
-  const gameStartDate = await getGameStartDate();
-  const cache = createValueCache();
+    return {
+      participant_id: participant.id,
+      participant_name: participant.name,
+      color_tag: participant.color_tag,
+      date: String(latestSnapshot.date),
+      nav_krw: navKrw,
+      cash_krw: cashKrw,
+      holdings_value_krw: Number(latestSnapshot.holdings_value_krw),
+      realized_pnl_krw: Number(latestSnapshot.realized_pnl_krw),
+      unrealized_pnl_krw: Number(latestSnapshot.unrealized_pnl_krw),
+      total_return_pct: totalReturn,
+      spy_return_pct: spyReturn,
+      kospi_return_pct: kospiReturn,
+      alpha_spy_pct: alphaSpyRaw ?? (spyReturn === null ? null : totalReturn - spyReturn),
+      alpha_kospi_pct: alphaKospiRaw ?? (kospiReturn === null ? null : totalReturn - kospiReturn),
+      sharpe_252: toNumOrNull(latestSnapshot.sharpe_252),
+      vol_ann_252: toNumOrNull(latestSnapshot.vol_ann_252),
+      mdd_to_date: Number(latestSnapshot.mdd_to_date),
+      beta_spy_252: toNumOrNull(latestSnapshot.beta_spy_252),
+      beta_kospi_252: toNumOrNull(latestSnapshot.beta_kospi_252),
+      cash_ratio: navKrw > 0 ? cashKrw / navKrw : null,
+      turnover_20d: null,
+    };
+  });
 
-  let spyByDate: Record<string, number | null> = {};
-  let kospiByDate: Record<string, number | null> = {};
-  try {
-    if (latestDate) {
-      const [spy, kospi] = await Promise.all([
-        getBenchmarkByCode("SPY"),
-        getBenchmarkByCode("KOSPI"),
-      ]);
-
-      if (spy && kospi) {
-        const [spyPrices, kospiPrices] = await Promise.all([
-          getBenchmarkPriceSeries(spy.id, "1900-01-01", latestDate),
-          getBenchmarkPriceSeries(kospi.id, "1900-01-01", latestDate),
-        ]);
-        spyByDate = buildBenchmarkReturnByDate(
-          "SPY",
-          gameStartDate,
-          latestDate,
-          spyPrices,
-        ).returnByDate;
-        kospiByDate = buildBenchmarkReturnByDate(
-          "KOSPI",
-          gameStartDate,
-          latestDate,
-          kospiPrices,
-        ).returnByDate;
-      }
+  const sorted = rows.sort((a, b) => {
+    if (sortBy === "sharpe") {
+      return (b.sharpe_252 ?? Number.NEGATIVE_INFINITY) - (a.sharpe_252 ?? Number.NEGATIVE_INFINITY);
     }
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : "Unknown benchmark error";
-    console.error(`[leaderboard] benchmark lookup failed: ${msg}`);
+    return b.total_return_pct - a.total_return_pct;
+  });
+
+  if (!includeInstrumentRows) {
+    return { date: latestDate, rows: sorted, instrumentRows: [] as LeaderboardInstrumentsRow[] };
   }
 
-  const computed = await Promise.all(
-    withSnapshot.map(async ({ participant, portfolio, latestSnapshot, latestTradeDate }) => {
+  const cache = createValueCache();
+  const instrumentRows = await Promise.all(
+    withSnapshot.map(async ({ participant, portfolio, latestSnapshot }) => {
       const snapshotDate = String(latestSnapshot.date);
-      const valuationDate =
-        [snapshotDate, latestTradeDate]
-          .filter((v): v is string => Boolean(v))
-          .sort((a, b) => a.localeCompare(b))
-          .at(-1) ?? snapshotDate;
-      const startingCash = Number(participant.starting_cash_krw);
-
-      let totalReturn = Number(latestSnapshot.total_return_pct);
-      let navKrw = Number(latestSnapshot.nav_krw);
-      let cashKrw = Number(latestSnapshot.cash_krw);
-      let holdingsKrw = Number(latestSnapshot.holdings_value_krw);
-      let realizedPnlKrw = Number(latestSnapshot.realized_pnl_krw);
-      let unrealizedPnlKrw = Number(latestSnapshot.unrealized_pnl_krw);
-
+      const navKrw = Number(latestSnapshot.nav_krw);
       let turnover20d: number | null = null;
-      let topReturn: RankedInstrumentStat[] = [];
-      let topWeight: RankedInstrumentStat[] = [];
-      let topUnrealized: RankedInstrumentStat[] = [];
       let state: Awaited<ReturnType<typeof rebuildPortfolioState>> | null = null;
-      let stateDate = valuationDate;
 
       try {
-        state = await rebuildPortfolioState(
-          portfolio,
-          participant,
-          valuationDate,
-          cache,
-        );
+        state = await rebuildPortfolioState(portfolio, participant, snapshotDate, cache);
       } catch (err) {
         const msg = err instanceof Error ? err.message : "Unknown valuation error";
         console.error(
-          `[leaderboard] live valuation failed for ${participant.id} (${valuationDate}): ${msg}`,
+          `[leaderboard] instrument stats valuation failed for ${participant.id} (${snapshotDate}): ${msg}`,
         );
-      }
-
-      if (!state && snapshotDate !== valuationDate) {
-        try {
-          state = await rebuildPortfolioState(
-            portfolio,
-            participant,
-            snapshotDate,
-            cache,
-          );
-          stateDate = snapshotDate;
-        } catch (err) {
-          const msg =
-            err instanceof Error ? err.message : "Unknown snapshot valuation error";
-          console.error(
-            `[leaderboard] snapshot valuation failed for ${participant.id} (${snapshotDate}): ${msg}`,
-          );
-        }
-      }
-
-      if (state) {
-        let refreshedExactPrice = false;
-        for (const position of state.positions) {
-          const usablePoint = await getUsableInstrumentPricePoint(
-            position.instrument,
-            valuationDate,
-          );
-          if (usablePoint.refreshed && usablePoint.close !== null && !usablePoint.isFallback) {
-            refreshedExactPrice = true;
-          }
-        }
-
-        if (refreshedExactPrice) {
-          try {
-            state = await rebuildPortfolioState(
-              portfolio,
-              participant,
-              valuationDate,
-              createValueCache(),
-            );
-            stateDate = valuationDate;
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : "Unknown refreshed valuation error";
-            console.error(
-              `[leaderboard] refreshed valuation failed for ${participant.id} (${valuationDate}): ${msg}`,
-            );
-          }
-        }
-      }
-
-      if (state) {
-        navKrw = state.nav_krw;
-        cashKrw = state.cash_krw;
-        holdingsKrw = state.holdings_value_krw;
-        realizedPnlKrw = state.realized_pnl_krw;
-        unrealizedPnlKrw = state.unrealized_pnl_krw;
-        totalReturn = startingCash === 0 ? 0 : navKrw / startingCash - 1;
       }
 
       try {
         turnover20d = await computeTurnover20d({
           portfolioId: portfolio.id,
-          date: valuationDate,
+          date: snapshotDate,
           navKrw,
           cache,
         });
       } catch (err) {
         const msg = err instanceof Error ? err.message : "Unknown turnover error";
         console.error(
-          `[leaderboard] turnover calc failed for ${participant.id} (${valuationDate}): ${msg}`,
+          `[leaderboard] turnover calc failed for ${participant.id} (${snapshotDate}): ${msg}`,
         );
       }
 
@@ -563,13 +604,12 @@ export async function fetchLeaderboard(sortBy: "return" | "sharpe" = "return") {
       const unrealizedItems: Array<{ symbol: string; label: string; value: number | null }> = [];
 
       for (const p of state?.positions ?? []) {
-        const resolvedMark = resolveUsableMarkPrice(
-          await cache.priceOnOrBefore(p.instrument.id, stateDate),
+        const close = resolveUsableMarkPrice(
+          await cache.priceOnOrBefore(p.instrument.id, snapshotDate),
           p.avg_cost_local,
-        );
-        const close = resolvedMark.value;
+        ).value;
         const isUsd = p.instrument.currency === "USD";
-        const fx = isUsd ? await cache.fxOnOrBefore(stateDate) : 1;
+        const fx = isUsd ? await cache.fxOnOrBefore(snapshotDate) : 1;
         if (isUsd && !fx) continue;
         const fxRate = fx ?? 1;
         const valueKrw = p.quantity * close * fxRate;
@@ -577,78 +617,24 @@ export async function fetchLeaderboard(sortBy: "return" | "sharpe" = "return") {
         const ret = p.avg_cost_local > 0 ? close / p.avg_cost_local - 1 : null;
         const weight = navKrw > 0 ? valueKrw / navKrw : null;
         const unrealized = valueKrw - costKrw;
-
         const label = p.instrument.name || p.instrument.symbol;
         returnItems.push({ symbol: p.instrument.symbol, label, value: ret });
         weightItems.push({ symbol: p.instrument.symbol, label, value: weight });
         unrealizedItems.push({ symbol: p.instrument.symbol, label, value: unrealized });
       }
 
-      topReturn = top3Stats(returnItems);
-      topWeight = top3Stats(weightItems);
-      topUnrealized = top3Stats(unrealizedItems);
-
-      const spyReturn =
-        spyByDate[valuationDate] ?? toNumOrNull(latestSnapshot.spy_return_pct);
-      const kospiReturn =
-        kospiByDate[valuationDate] ?? toNumOrNull(latestSnapshot.kospi_return_pct);
-      const alphaSpyRaw = toNumOrNull(latestSnapshot.alpha_spy_pct);
-      const alphaKospiRaw = toNumOrNull(latestSnapshot.alpha_kospi_pct);
-      const alphaSpy =
-        spyReturn === null ? alphaSpyRaw : totalReturn - spyReturn;
-      const alphaKospi =
-        kospiReturn === null ? alphaKospiRaw : totalReturn - kospiReturn;
-
-      const leaderboardRow: LeaderboardRow = {
+      return {
         participant_id: participant.id,
         participant_name: participant.name,
         color_tag: participant.color_tag,
-        date: valuationDate,
-        nav_krw: navKrw,
-        cash_krw: cashKrw,
-        holdings_value_krw: holdingsKrw,
-        realized_pnl_krw: realizedPnlKrw,
-        unrealized_pnl_krw: unrealizedPnlKrw,
-        total_return_pct: totalReturn,
-        spy_return_pct: spyReturn,
-        kospi_return_pct: kospiReturn,
-        alpha_spy_pct: alphaSpy,
-        alpha_kospi_pct: alphaKospi,
-        sharpe_252: toNumOrNull(latestSnapshot.sharpe_252),
-        vol_ann_252: toNumOrNull(latestSnapshot.vol_ann_252),
-        mdd_to_date: Number(latestSnapshot.mdd_to_date),
-        beta_spy_252: toNumOrNull(latestSnapshot.beta_spy_252),
-        beta_kospi_252: toNumOrNull(latestSnapshot.beta_kospi_252),
-        cash_ratio: navKrw > 0 ? cashKrw / navKrw : null,
+        cash_ratio: navKrw > 0 ? Number(latestSnapshot.cash_krw) / navKrw : null,
         turnover_20d: turnover20d,
-      };
-
-      const instrumentsRow: LeaderboardInstrumentsRow = {
-        participant_id: participant.id,
-        participant_name: participant.name,
-        color_tag: participant.color_tag,
-        cash_ratio: navKrw > 0 ? cashKrw / navKrw : null,
-        turnover_20d: turnover20d,
-        top_return: topReturn,
-        top_weight: topWeight,
-        top_unrealized: topUnrealized,
-      };
-
-      return { leaderboardRow, instrumentsRow };
+        top_return: top3Stats(returnItems),
+        top_weight: top3Stats(weightItems),
+        top_unrealized: top3Stats(unrealizedItems),
+      } satisfies LeaderboardInstrumentsRow;
     }),
   );
-
-  const rows: LeaderboardRow[] = computed.map((x) => x.leaderboardRow);
-  const instrumentRows: LeaderboardInstrumentsRow[] = computed.map(
-    (x) => x.instrumentsRow,
-  );
-
-  const sorted = rows.sort((a, b) => {
-    if (sortBy === "sharpe") {
-      return (b.sharpe_252 ?? Number.NEGATIVE_INFINITY) - (a.sharpe_252 ?? Number.NEGATIVE_INFINITY);
-    }
-    return b.total_return_pct - a.total_return_pct;
-  });
 
   const order = new Map(sorted.map((x, idx) => [x.participant_id, idx] as const));
   const sortedInstrumentRows = [...instrumentRows].sort(
@@ -663,20 +649,12 @@ export async function fetchLeaderboard(sortBy: "return" | "sharpe" = "return") {
 export async function fetchParticipantDetail(participantId: string) {
   const pair = await getParticipantById(participantId);
   if (!pair) return null;
-  const gameStartDate = await getGameStartDate();
   const latestSnapshot = await getParticipantLatestSnapshot(participantId);
-  const snapshots = await getParticipantSnapshots(participantId, gameStartDate);
   const [tradeRows, studyIdeas] = await Promise.all([
     getTradesJournal(pair.portfolio.id),
-    getStudyTrackerIdeas(),
+    getStudyTrackerIdeaRefs(),
   ]);
   const notes = await getParticipantNotes(participantId);
-  const latestSnapshotDate = latestSnapshot?.date ? String(latestSnapshot.date) : null;
-  const latestTradeDate = tradeRows[0]?.trade_date ? String(tradeRows[0].trade_date) : null;
-  const valuationDate = [latestSnapshotDate, latestTradeDate]
-    .filter((x): x is string => Boolean(x))
-    .sort((a, b) => a.localeCompare(b))
-    .at(-1) ?? null;
 
   const studyCallOptions = studyIdeas.map((idea) => ({
     id: idea.id,
@@ -684,229 +662,19 @@ export async function fetchParticipantDetail(participantId: string) {
       .filter(Boolean)
       .join(" | "),
   }));
-  const ideaMap = new Map(
-    studyIdeas.map((idea) => [
-      idea.id,
-      {
-        id: idea.id,
-        ticker: idea.ticker,
-        company_name: idea.company_name,
-        presenter: idea.presenter,
-        presented_at: idea.presented_at,
-      },
-    ]),
-  );
-  const trades = tradeRows.map((trade: any) => ({
-    ...trade,
-    source_idea_id:
-      trade.source_idea_id === null || trade.source_idea_id === undefined
-        ? null
-        : Number(trade.source_idea_id),
-    linked_call:
-      trade.source_idea_id === null || trade.source_idea_id === undefined
-        ? null
-        : ideaMap.get(Number(trade.source_idea_id)) ?? null,
-  }));
-
-  const valuationCache = createValueCache();
-  let resolvedValuationDate = valuationDate;
-  let liveState: Awaited<ReturnType<typeof rebuildPortfolioState>> | null = null;
-  let repairedInstrumentNames = new Map<string, string>();
-
-  if (resolvedValuationDate) {
-    try {
-      liveState = await rebuildPortfolioState(
-        pair.portfolio,
-        pair.participant,
-        resolvedValuationDate,
-        valuationCache,
-      );
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : "Unknown valuation error";
-      console.error(
-        `[participant-detail] live valuation failed for ${participantId} (${resolvedValuationDate}): ${msg}`,
-      );
-      if (latestSnapshotDate && latestSnapshotDate !== resolvedValuationDate) {
-        try {
-          liveState = await rebuildPortfolioState(
-            pair.portfolio,
-            pair.participant,
-            latestSnapshotDate,
-            valuationCache,
-          );
-          resolvedValuationDate = latestSnapshotDate;
-        } catch (fallbackErr) {
-          const fallbackMsg =
-            fallbackErr instanceof Error ? fallbackErr.message : "Unknown fallback valuation error";
-          console.error(
-            `[participant-detail] fallback valuation failed for ${participantId} (${latestSnapshotDate}): ${fallbackMsg}`,
-          );
-          liveState = null;
-          resolvedValuationDate = latestSnapshotDate;
-        }
-      }
-    }
-  }
-
-  if (liveState) {
-    repairedInstrumentNames = await repairKoreanInstrumentMetadata(
-      liveState.positions.map((position) => position.instrument),
-    );
-  }
-
-  let holdings: any[] = [];
-  if (resolvedValuationDate && liveState) {
-    holdings = [];
-    for (const p of liveState.positions) {
-      const usablePoint = await getUsableInstrumentPricePoint(p.instrument, resolvedValuationDate);
-      const resolvedMark = resolveUsableMarkPrice(usablePoint.close, p.avg_cost_local);
-      const close = resolvedMark.value;
-      const fx =
-        p.instrument.currency === "USD"
-          ? await valuationCache.fxOnOrBefore(resolvedValuationDate)
-          : 1;
-      const fxRate = fx ?? 1;
-      const valueKrw = p.quantity * close * fxRate;
-      const pnlKrw = (close - p.avg_cost_local) * p.quantity * fxRate;
-      holdings.push({
-        symbol: p.instrument.symbol,
-        name: repairedInstrumentNames.get(p.instrument.id) ?? p.instrument.name,
-        market: p.instrument.market,
-        currency: p.instrument.currency,
-        quantity: p.quantity,
-        avg_cost_local: p.avg_cost_local,
-        mark_local: close,
-        price_unavailable: usablePoint.close === null || resolvedMark.isFallback,
-        value_krw: valueKrw,
-        unrealized_pnl_krw: pnlKrw,
-      });
-    }
-  }
-
-  let spy: Awaited<ReturnType<typeof getBenchmarkByCode>> = null;
-  let kospi: Awaited<ReturnType<typeof getBenchmarkByCode>> = null;
-  try {
-    [spy, kospi] = await Promise.all([
-      getBenchmarkByCode("SPY"),
-      getBenchmarkByCode("KOSPI"),
-    ]);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : "Unknown benchmark error";
-    console.error(`[participant-detail] benchmark lookup failed: ${msg}`);
-  }
-
-  let spyByDate: Record<string, number | null> = {};
-  let kospiByDate: Record<string, number | null> = {};
-  const benchmarkEndDate = resolvedValuationDate ?? latestSnapshotDate;
-  if (benchmarkEndDate && spy && kospi) {
-    await Promise.all([
-      getUsableInstrumentPricePoint(spy, benchmarkEndDate),
-      getUsableInstrumentPricePoint(kospi, benchmarkEndDate),
-    ]);
-
-    const [spyPrices, kospiPrices] = await Promise.all([
-      getBenchmarkPriceSeries(spy.id, "1900-01-01", benchmarkEndDate),
-      getBenchmarkPriceSeries(kospi.id, "1900-01-01", benchmarkEndDate),
-    ]);
-    spyByDate = buildBenchmarkReturnByDate(
-      "SPY",
-      gameStartDate,
-      benchmarkEndDate,
-      spyPrices,
-    ).returnByDate;
-    kospiByDate = buildBenchmarkReturnByDate(
-      "KOSPI",
-      gameStartDate,
-      benchmarkEndDate,
-      kospiPrices,
-    ).returnByDate;
-  }
-
-  let normalizedLatestSnapshot: any = null;
-  if (resolvedValuationDate && liveState) {
-    const startingCash = Number(pair.participant.starting_cash_krw);
-    const totalReturn = startingCash === 0 ? 0 : liveState.nav_krw / startingCash - 1;
-    const spyReturn = spyByDate[resolvedValuationDate] ?? null;
-    const kospiReturn = kospiByDate[resolvedValuationDate] ?? null;
-    const alphaSpy = spyReturn === null ? null : totalReturn - spyReturn;
-    const alphaKospi = kospiReturn === null ? null : totalReturn - kospiReturn;
-    const isOfficialSnapshotDate =
-      latestSnapshot !== null && latestSnapshotDate === resolvedValuationDate;
-
-    normalizedLatestSnapshot = {
-      ...latestSnapshot,
-      date: resolvedValuationDate,
-      nav_krw: liveState.nav_krw,
-      cash_krw: liveState.cash_krw,
-      holdings_value_krw: liveState.holdings_value_krw,
-      realized_pnl_krw: liveState.realized_pnl_krw,
-      unrealized_pnl_krw: liveState.unrealized_pnl_krw,
-      total_return_pct: totalReturn,
-      spy_return_pct: spyReturn,
-      kospi_return_pct: kospiReturn,
-      alpha_spy_pct: alphaSpy,
-      alpha_kospi_pct: alphaKospi,
-      sharpe_252:
-        isOfficialSnapshotDate && latestSnapshot ? toNumOrNull(latestSnapshot.sharpe_252) : null,
-      vol_ann_252:
-        isOfficialSnapshotDate && latestSnapshot ? toNumOrNull(latestSnapshot.vol_ann_252) : null,
-      mdd_to_date:
-        isOfficialSnapshotDate && latestSnapshot ? Number(latestSnapshot.mdd_to_date) : null,
-      beta_spy_252:
-        isOfficialSnapshotDate && latestSnapshot ? toNumOrNull(latestSnapshot.beta_spy_252) : null,
-      beta_kospi_252:
-        isOfficialSnapshotDate && latestSnapshot
-          ? toNumOrNull(latestSnapshot.beta_kospi_252)
-          : null,
-    };
-  } else if (latestSnapshot) {
-    const latestDateKey = latestSnapshot.date as string;
-    const totalReturn = Number(latestSnapshot.total_return_pct);
-    const spyReturn =
-      toNumOrNull(latestSnapshot.spy_return_pct) ?? (spyByDate[latestDateKey] ?? null);
-    const kospiReturn =
-      toNumOrNull(latestSnapshot.kospi_return_pct) ?? (kospiByDate[latestDateKey] ?? null);
-    const alphaSpyRaw = toNumOrNull(latestSnapshot.alpha_spy_pct);
-    const alphaKospiRaw = toNumOrNull(latestSnapshot.alpha_kospi_pct);
-    const alphaSpy = alphaSpyRaw ?? (spyReturn === null ? null : totalReturn - spyReturn);
-    const alphaKospi =
-      alphaKospiRaw ?? (kospiReturn === null ? null : totalReturn - kospiReturn);
-
-    normalizedLatestSnapshot = {
-      ...latestSnapshot,
-      nav_krw: Number(latestSnapshot.nav_krw),
-      cash_krw: Number(latestSnapshot.cash_krw),
-      holdings_value_krw: Number(latestSnapshot.holdings_value_krw),
-      realized_pnl_krw: Number(latestSnapshot.realized_pnl_krw),
-      unrealized_pnl_krw: Number(latestSnapshot.unrealized_pnl_krw),
-      total_return_pct: totalReturn,
-      spy_return_pct: spyReturn,
-      kospi_return_pct: kospiReturn,
-      alpha_spy_pct: alphaSpy,
-      alpha_kospi_pct: alphaKospi,
-      sharpe_252: toNumOrNull(latestSnapshot.sharpe_252),
-      vol_ann_252: toNumOrNull(latestSnapshot.vol_ann_252),
-      mdd_to_date: Number(latestSnapshot.mdd_to_date),
-      beta_spy_252: toNumOrNull(latestSnapshot.beta_spy_252),
-      beta_kospi_252: toNumOrNull(latestSnapshot.beta_kospi_252),
-    };
-  }
+  const trades = mapTradesWithLinkedCalls(tradeRows, studyIdeas);
+  const { latestSnapshot: normalizedLatestSnapshot, holdings } =
+    await buildParticipantSnapshotAndHoldings({
+      participantId,
+      pair,
+      latestSnapshot,
+      tradeRows,
+    });
 
   return {
     participant: pair.participant,
     portfolio: pair.portfolio,
     latestSnapshot: normalizedLatestSnapshot,
-    snapshots: snapshots.map((s: any) => ({
-      ...s,
-      nav_krw: Number(s.nav_krw),
-      cash_krw: Number(s.cash_krw),
-      holdings_value_krw: Number(s.holdings_value_krw),
-      realized_pnl_krw: Number(s.realized_pnl_krw),
-      unrealized_pnl_krw: Number(s.unrealized_pnl_krw),
-      total_return_pct: Number(s.total_return_pct),
-      ret_daily: s.ret_daily === null ? null : Number(s.ret_daily),
-      mdd_to_date: Number(s.mdd_to_date),
-    })),
     holdings,
     notes,
     studyCallOptions,
@@ -918,6 +686,55 @@ export async function fetchParticipantDetail(participantId: string) {
       slippage_bps: t.slippage_bps === null ? null : Number(t.slippage_bps),
     })),
   };
+}
+
+export async function fetchParticipantSections(participantId: string) {
+  const pair = await getParticipantById(participantId);
+  if (!pair) return null;
+
+  const latestSnapshot = await getParticipantLatestSnapshot(participantId);
+  const tradeRows = await getTradesJournal(pair.portfolio.id);
+  const linkedIdeaIds = [...new Set(
+    tradeRows
+      .map((trade: any) =>
+        trade.source_idea_id === null || trade.source_idea_id === undefined
+          ? null
+          : Number(trade.source_idea_id),
+      )
+      .filter((ideaId): ideaId is number => Number.isInteger(ideaId)),
+  )];
+  const studyIdeas = await getStudyTrackerIdeaRefsByIds(linkedIdeaIds);
+  const trades = mapTradesWithLinkedCalls(tradeRows, studyIdeas);
+  const { latestSnapshot: normalizedLatestSnapshot, holdings } =
+    await buildParticipantSnapshotAndHoldings({
+      participantId,
+      pair,
+      latestSnapshot,
+      tradeRows,
+    });
+
+  return {
+    latestSnapshot: normalizedLatestSnapshot,
+    holdings,
+    trades: trades.map((t: any) => ({
+      ...t,
+      quantity: Number(t.quantity),
+      price: Number(t.price),
+      fee_rate: t.fee_rate === null ? null : Number(t.fee_rate),
+      slippage_bps: t.slippage_bps === null ? null : Number(t.slippage_bps),
+    })),
+  };
+}
+
+function buildSnapshotChartSeries(
+  snapshots: Awaited<ReturnType<typeof getParticipantSnapshots>>,
+  startingCash: number,
+) {
+  return snapshots.map((snapshot: any) => ({
+    date: String(snapshot.date),
+    nav_indexed: startingCash === 0 ? 100 : (Number(snapshot.nav_krw) / startingCash) * 100,
+    drawdown: Number(snapshot.mdd_to_date),
+  }));
 }
 
 export async function fetchParticipantPerformanceSeries(participantId: string) {
@@ -936,16 +753,16 @@ export async function fetchParticipantPerformanceSeries(participantId: string) {
     .at(-1) ?? null;
   if (!benchmarkEndDate) return [];
 
-  const tradeRows = await getTradesForPortfolio(pair.portfolio.id, benchmarkEndDate);
+  const firstTradeDate = await getFirstTradeDateForPortfolio(pair.portfolio.id);
+  const tradeRows =
+    latestTradeDate && latestSnapshotDate && latestTradeDate > latestSnapshotDate
+      ? await getTradesForPortfolio(pair.portfolio.id, benchmarkEndDate)
+      : [];
   const chartStartDate =
     tradeRows[0]?.trade_date
       ? String(tradeRows[0].trade_date)
-      : latestSnapshotDate ?? benchmarkEndDate;
+      : firstTradeDate ?? latestSnapshotDate ?? benchmarkEndDate;
   if (!chartStartDate) return [];
-  const seriesStartDate =
-    benchmarkHistorySeedStart(benchmarkEndDate) < chartStartDate
-      ? benchmarkHistorySeedStart(benchmarkEndDate)
-      : chartStartDate;
 
   let spy: Awaited<ReturnType<typeof getBenchmarkByCode>> = null;
   let kospi: Awaited<ReturnType<typeof getBenchmarkByCode>> = null;
@@ -962,50 +779,52 @@ export async function fetchParticipantPerformanceSeries(participantId: string) {
   let spyByDate: Record<string, number | null> = {};
   let kospiByDate: Record<string, number | null> = {};
   if (spy && kospi) {
-    const chartDates = dateRange(seriesStartDate, benchmarkEndDate).filter((date) => !isWeekend(date));
-    let [spyPrices, kospiPrices] = await Promise.all([
-      getBenchmarkPriceSeries(spy.id, "1900-01-01", benchmarkEndDate),
-      getBenchmarkPriceSeries(kospi.id, "1900-01-01", benchmarkEndDate),
+    const [spyPrices, kospiPrices] = await Promise.all([
+      getBoundedBenchmarkPrices(spy, chartStartDate, benchmarkEndDate),
+      getBoundedBenchmarkPrices(kospi, chartStartDate, benchmarkEndDate),
     ]);
-
-    const spyExactDates = new Set(spyPrices.map((row) => String(row.date)));
-    const kospiExactDates = new Set(kospiPrices.map((row) => String(row.date)));
-    const missingSpyDates = chartDates.filter((date) => !spyExactDates.has(date));
-    const missingKospiDates = chartDates.filter((date) => !kospiExactDates.has(date));
-
-    const [spyRefreshed, kospiRefreshed] = await Promise.all([
-      ensureBenchmarkRowsForDates(spy, missingSpyDates),
-      ensureBenchmarkRowsForDates(kospi, missingKospiDates),
-    ]);
-
-    if (spyRefreshed || kospiRefreshed) {
-      [spyPrices, kospiPrices] = await Promise.all([
-        getBenchmarkPriceSeries(spy.id, "1900-01-01", benchmarkEndDate),
-        getBenchmarkPriceSeries(kospi.id, "1900-01-01", benchmarkEndDate),
-      ]);
-    }
 
     spyByDate = buildBenchmarkReturnByDate(
       "SPY",
-      seriesStartDate,
+      chartStartDate,
       benchmarkEndDate,
       spyPrices,
     ).returnByDate;
     kospiByDate = buildBenchmarkReturnByDate(
       "KOSPI",
-      seriesStartDate,
+      chartStartDate,
       benchmarkEndDate,
       kospiPrices,
     ).returnByDate;
   }
 
-  const chartSeries = await buildParticipantChartSeries({
-    portfolio: pair.portfolio,
-    participant: pair.participant,
-    tradeRows,
-    startDate: seriesStartDate,
-    endDate: benchmarkEndDate,
-  });
+  const startingCash = Number(pair.participant.starting_cash_krw);
+  const snapshots = await getParticipantSnapshots(participantId, chartStartDate);
+  const snapshotSeries = buildSnapshotChartSeries(snapshots, startingCash);
+
+  let chartSeries = snapshotSeries;
+  if (tradeRows.length > 0) {
+    const tailStartDate = latestSnapshotDate ?? chartStartDate;
+    const tailSeries = await buildParticipantChartSeries({
+      portfolio: pair.portfolio,
+      participant: pair.participant,
+      tradeRows,
+      startDate: tailStartDate,
+      endDate: benchmarkEndDate,
+    });
+    chartSeries = [
+      ...snapshotSeries.filter((row) => row.date < tailStartDate),
+      ...tailSeries,
+    ];
+  } else if (chartSeries.length === 0) {
+    chartSeries = await buildParticipantChartSeries({
+      portfolio: pair.portfolio,
+      participant: pair.participant,
+      tradeRows: await getTradesForPortfolio(pair.portfolio.id, benchmarkEndDate),
+      startDate: chartStartDate,
+      endDate: benchmarkEndDate,
+    });
+  }
 
   return chartSeries.map((row) => ({
     ...row,
@@ -1142,13 +961,13 @@ export async function fetchParticipantContributionBreakdown(
 
       const startMark = startPosition
         ? resolveUsableMarkPrice(
-            (await getUsableInstrumentPricePoint(instrument, startDate)).close,
+            (await getStoredInstrumentPricePoint(instrument, startDate)).close,
             startPosition.avg_cost_local,
           ).value
         : 0;
       const endMark = endPosition
         ? resolveUsableMarkPrice(
-            (await getUsableInstrumentPricePoint(instrument, endDate)).close,
+            (await getStoredInstrumentPricePoint(instrument, endDate)).close,
             endPosition.avg_cost_local,
           ).value
         : 0;

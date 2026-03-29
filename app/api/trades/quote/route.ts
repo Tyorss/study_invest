@@ -30,7 +30,13 @@ async function resolveInstrumentName(params: {
   providerSymbol: string;
   fallbackName: string | null;
 }) {
-  if (params.market === "KR" && /^\d{6}$/.test(params.symbol)) {
+  const fallbackName = params.fallbackName?.trim() ?? "";
+  const needsLookup =
+    !fallbackName ||
+    fallbackName === params.symbol ||
+    (/^[A-Za-z0-9 .&()\\-]+$/.test(fallbackName) && !/[가-힣]/.test(fallbackName));
+
+  if (params.market === "KR" && /^\d{6}$/.test(params.symbol) && needsLookup) {
     try {
       const name = await lookupInstrumentNameWithPython(
         "fdr",
@@ -47,7 +53,7 @@ async function resolveInstrumentName(params: {
     }
   }
 
-  return params.fallbackName;
+  return fallbackName || params.fallbackName;
 }
 
 function noStoreJson(body: unknown, init?: ResponseInit) {

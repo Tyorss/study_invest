@@ -8,6 +8,12 @@ export interface ProviderAttemptLog {
   reason?: string;
 }
 
+function hasUsableClose(
+  point: { close?: number | null } | null | undefined,
+): point is { close: number } {
+  return Boolean(point && Number.isFinite(point.close) && Number(point.close) > 0);
+}
+
 export async function fetchBestClosePointFromProviderChain(
   handles: ProviderHandle[],
   input: {
@@ -48,7 +54,7 @@ export async function fetchBestClosePointFromProviderChain(
             )
           : null;
 
-      if (point !== null && Number.isFinite(point.close)) {
+      if (hasUsableClose(point)) {
         attempts.push({
           provider: providerName,
           status: "success",
@@ -75,7 +81,7 @@ export async function fetchBestClosePointFromProviderChain(
         input.date,
         input.providerSymbol,
       );
-      if (close !== null && Number.isFinite(close)) {
+      if (close !== null && Number.isFinite(close) && close > 0) {
         const directPoint: DailyClosePoint = {
           date: input.date,
           close,
@@ -134,10 +140,16 @@ export async function fetchBestClosePointFromProviderChain(
 }
 
 export function isExactPricePoint(
-  point: { date?: string | null; source?: string | null } | null | undefined,
+  point: { date?: string | null; source?: string | null; close?: number | null } | null | undefined,
   targetDate: string,
 ) {
-  return Boolean(point && point.date === targetDate && point.source !== "carry_forward");
+  return Boolean(
+    point &&
+      point.date === targetDate &&
+      point.source !== "carry_forward" &&
+      Number.isFinite(point.close) &&
+      Number(point.close) > 0,
+  );
 }
 
 type ComparableClosePoint = {
@@ -161,24 +173,26 @@ export function pickPreferredClosePoint<T extends ComparableClosePoint>(
   left: T | null,
   right: T | null,
 ): T | null {
-  if (!left) return right;
-  if (!right) return left;
+  const usableLeft = hasUsableClose(left) ? left : null;
+  const usableRight = hasUsableClose(right) ? right : null;
+  if (!usableLeft) return usableRight;
+  if (!usableRight) return usableLeft;
 
-  const leftPriority = pointPriority(left, targetDate);
-  const rightPriority = pointPriority(right, targetDate);
+  const leftPriority = pointPriority(usableLeft, targetDate);
+  const rightPriority = pointPriority(usableRight, targetDate);
   if (leftPriority !== rightPriority) {
-    return leftPriority > rightPriority ? left : right;
+    return leftPriority > rightPriority ? usableLeft : usableRight;
   }
 
-  if (left.date !== right.date) {
-    return left.date > right.date ? left : right;
+  if (usableLeft.date !== usableRight.date) {
+    return usableLeft.date > usableRight.date ? usableLeft : usableRight;
   }
 
-  const leftCarry = left.source === "carry_forward";
-  const rightCarry = right.source === "carry_forward";
+  const leftCarry = usableLeft.source === "carry_forward";
+  const rightCarry = usableRight.source === "carry_forward";
   if (leftCarry !== rightCarry) {
-    return leftCarry ? right : left;
+    return leftCarry ? usableRight : usableLeft;
   }
 
-  return right;
+  return usableRight;
 }

@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { FX_PAIR_USDKRW } from "@/lib/constants";
 import { getFxPointOnOrBefore } from "@/lib/db";
-import { updateFxForDate } from "@/lib/jobs/runner";
 
 function todayLocalIsoDate() {
   const d = new Date();
@@ -39,13 +38,7 @@ export async function GET(req: Request) {
       );
     }
 
-    let point = await getFxPointOnOrBefore(FX_PAIR_USDKRW, requestedDate);
-    let source: "cache" | "provider" = "cache";
-    if (!point) {
-      await updateFxForDate(requestedDate);
-      point = await getFxPointOnOrBefore(FX_PAIR_USDKRW, requestedDate);
-      source = "provider";
-    }
+    const point = await getFxPointOnOrBefore(FX_PAIR_USDKRW, requestedDate);
 
     if (!point) {
       return NextResponse.json(
@@ -60,7 +53,7 @@ export async function GET(req: Request) {
       requested_date: requestedDate,
       effective_date: point.date,
       rate: point.rate,
-      source,
+      source: "stored",
     });
   } catch (err) {
     return NextResponse.json(

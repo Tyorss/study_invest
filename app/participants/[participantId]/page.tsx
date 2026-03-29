@@ -1,11 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { HoldingsTable } from "@/components/holdings-table";
-import { ParticipantPerformanceCharts } from "@/components/participant-performance-charts";
-import { ParticipantHeader } from "@/components/participant-header";
+import { ParticipantDetailShell } from "@/components/participant-detail-shell";
 import { ParticipantNotesEditor } from "@/components/participant-notes-editor";
-import { TradeEntryForm } from "@/components/trade-entry-form";
-import { TradesTable } from "@/components/trades-table";
 import { fetchParticipantDetail } from "@/lib/queries";
 
 export const dynamic = "force-dynamic";
@@ -17,11 +13,6 @@ export default async function ParticipantDetailPage({
 }) {
   const data = await fetchParticipantDetail(params.participantId);
   if (!data) notFound();
-  const firstTradeDate =
-    data.trades
-      .map((trade) => String(trade.trade_date))
-      .sort((a, b) => a.localeCompare(b))
-      .at(0) ?? null;
 
   return (
     <main className="space-y-5">
@@ -45,21 +36,19 @@ export default async function ParticipantDetailPage({
         </div>
       </header>
 
-      <ParticipantHeader snapshot={data.latestSnapshot} />
-      <TradeEntryForm portfolioId={data.portfolio.id} studyCallOptions={data.studyCallOptions} />
+      <ParticipantDetailShell
+        participantId={data.participant.id}
+        portfolioId={data.portfolio.id}
+        studyCallOptions={data.studyCallOptions}
+        initialLatestSnapshot={data.latestSnapshot}
+        initialHoldings={data.holdings}
+        initialTrades={data.trades}
+      />
 
       <ParticipantNotesEditor
         participantId={data.participant.id}
         initialMarketNote={data.notes.market_note}
         initialLines={data.notes.lines}
-      />
-
-      <HoldingsTable rows={data.holdings} />
-      <TradesTable rows={data.trades} />
-
-      <ParticipantPerformanceCharts
-        firstTradeDate={firstTradeDate}
-        participantId={data.participant.id}
       />
     </main>
   );

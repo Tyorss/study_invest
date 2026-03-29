@@ -310,7 +310,6 @@ export function StudyTrackerPortfolioBoard({ data }: { data: StudyTrackerPortfol
 
       setIdeas((prev) => prev.map((idea) => (idea.id === json.idea!.id ? json.idea! : idea)));
       setMessage(json.warning ? `Position updated. ${json.warning}` : "Position updated.");
-      router.refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save portfolio position");
     } finally {
@@ -338,7 +337,6 @@ export function StudyTrackerPortfolioBoard({ data }: { data: StudyTrackerPortfol
       setIdeas((prev) => prev.map((idea) => (idea.id === json.idea!.id ? json.idea! : idea)));
       setSelectedIdeaId(json.idea.id);
       setMessage(json.warning ? `현재가를 새로고쳤습니다. ${json.warning}` : "현재가를 새로고쳤습니다.");
-      router.refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "현재가를 새로고치지 못했습니다.");
     } finally {
@@ -377,7 +375,6 @@ export function StudyTrackerPortfolioBoard({ data }: { data: StudyTrackerPortfol
       setIdeas((prev) => prev.filter((idea) => idea.id !== selectedIdea.id));
       setSelectedIdeaId(null);
       setMessage("포트폴리오에서 제외했습니다.");
-      router.refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "포트폴리오에서 제외하지 못했습니다.");
     } finally {
