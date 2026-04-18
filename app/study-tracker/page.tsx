@@ -1,88 +1,30 @@
-import Link from "next/link";
-import { StudyTrackerNav } from "@/components/study-tracker-nav";
-import { StudyTrackerBoard } from "@/components/study-tracker-board";
-import { fetchStudyTrackerData } from "@/lib/study-tracker";
-import { withStudyTrackerHint } from "@/lib/study-tracker-payload";
+import { AllIdeasBoard } from "@/components/all-ideas-board";
+import { fetchHomeData } from "@/lib/home-data";
+import type { HomeIdea } from "@/lib/home-data";
 
 export const dynamic = "force-dynamic";
 
-export default async function StudyTrackerPage({
-  searchParams,
-}: {
-  searchParams?: {
-    compose?: string;
-    sourceSessionId?: string;
-    sourceCoverageId?: string;
-    presenter?: string;
-    companyName?: string;
-    ticker?: string;
-    sector?: string;
-    callDirection?: "long" | "neutral" | "short";
-    sourceSessionLabel?: string;
-    sourceCoverageLabel?: string;
-  };
-}) {
+export default async function StudyTrackerPage() {
+  let ideas: HomeIdea[] = [];
+  let error: string | null = null;
   try {
-    const data = await fetchStudyTrackerData();
-    const initialComposer =
-      searchParams?.compose === "1"
-        ? {
-            presenter: searchParams.presenter ?? "",
-            company_name: searchParams.companyName ?? "",
-            ticker: searchParams.ticker ?? "",
-            sector: searchParams.sector ?? "",
-            call_direction: searchParams.callDirection ?? "neutral",
-            source_session_id: searchParams.sourceSessionId
-              ? Number(searchParams.sourceSessionId)
-              : null,
-            source_coverage_id: searchParams.sourceCoverageId
-              ? Number(searchParams.sourceCoverageId)
-              : null,
-            sourceSessionLabel: searchParams.sourceSessionLabel,
-            sourceCoverageLabel: searchParams.sourceCoverageLabel,
-          }
-        : null;
-
-    return (
-      <main className="space-y-5">
-        <header className="panel p-5">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <Link href="/" className="text-sm text-slate-500 hover:underline">
-                홈으로 돌아가기
-              </Link>
-              <h1 className="mt-2 text-2xl font-semibold tracking-tight">스터디 정리</h1>
-              <p className="mt-2 text-sm text-slate-600">
-                스터디에서 다룬 종목을 정리하고 추적하는 화면입니다. 추적 수익률은 종목 등록 시점의 발표가와 현재가를 기준으로 계산됩니다.
-              </p>
-              <p className="mt-1 text-xs text-slate-500">
-                산업 발표와 커버리지 종목은 산업 발표 탭에서 따로 관리하고, 실제 편입 관리는 편입 포트폴리오에서 따로 확인합니다.
-              </p>
-            </div>
-          </div>
-          <StudyTrackerNav />
-        </header>
-
-        <StudyTrackerBoard data={data} initialComposer={initialComposer} />
-      </main>
-    );
+    const data = await fetchHomeData();
+    ideas = [...data.topPicks, ...data.watchlist, ...data.studyIdeas];
   } catch (err) {
-    const message = withStudyTrackerHint(
-      err instanceof Error ? err.message : "Failed to load study tracker",
-    );
+    error = err instanceof Error ? err.message : "데이터 로드 실패";
+  }
+
+  if (error) {
     return (
-      <main className="space-y-5">
-        <header className="panel p-5">
-          <Link href="/" className="text-sm text-slate-500 hover:underline">
-            홈으로 돌아가기
-          </Link>
-          <h1 className="mt-2 text-2xl font-semibold tracking-tight">스터디 정리</h1>
-          <StudyTrackerNav />
-        </header>
-        <section className="panel p-5">
-          <div className="text-sm text-rose-700">{message}</div>
-        </section>
-      </main>
+      <div style={{ minHeight: "100vh", background: "#fff", color: "#171717", padding: "40px 24px", fontFamily: "'Pretendard Variable', -apple-system, sans-serif" }}>
+        <div style={{ maxWidth: 960, margin: "0 auto" }}>
+          <div style={{ padding: "14px 18px", background: "#FEF2F2", border: "1px solid #FCA5A5", color: "#991b1b", fontSize: "0.9rem" }}>
+            {error}
+          </div>
+        </div>
+      </div>
     );
   }
+
+  return <AllIdeasBoard initialIdeas={ideas} />;
 }

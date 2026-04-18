@@ -704,6 +704,7 @@ function normalizeStudyTrackerIdeaInput(input: StudyTrackerIdeaInput) {
   return {
     presented_at: input.presented_at ?? null,
     presenter: input.presenter.trim(),
+    category: input.category ?? "study",
     company_name: input.company_name.trim(),
     ticker: input.ticker.trim(),
     sector: input.sector?.trim() || null,

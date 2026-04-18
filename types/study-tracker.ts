@@ -23,6 +23,7 @@ export interface StudyTrackerIdeaRow {
   seed_key: string | null;
   presented_at: string | null;
   presenter: string;
+  category?: StudyTrackerIdeaCategory | null;
   company_name: string;
   ticker: string;
   sector: string | null;
@@ -260,9 +261,12 @@ export interface StudyTrackerIdea {
   adoption_count: number;
 }
 
+export type StudyTrackerIdeaCategory = "top_pick" | "watchlist" | "study";
+
 export interface StudyTrackerIdeaInput {
   presented_at?: string | null;
   presenter: string;
+  category?: StudyTrackerIdeaCategory | null;
   company_name: string;
   ticker: string;
   sector?: string | null;

@@ -158,6 +158,17 @@ export function normalizeStudyTrackerIdeaPayload(payload: unknown): StudyTracker
   ) {
     throw new Error("conviction_score must be an integer between 1 and 5");
   }
+  const categoryRaw = parseOptionalString(body.category);
+  if (
+    categoryRaw !== null &&
+    categoryRaw !== "top_pick" &&
+    categoryRaw !== "watchlist" &&
+    categoryRaw !== "study"
+  ) {
+    throw new Error("category must be top_pick, watchlist, or study");
+  }
+  const category = categoryRaw as "top_pick" | "watchlist" | "study" | null;
+
   const targetStatus = parseOptionalString(body.target_status);
   if (
     targetStatus !== null &&
@@ -180,6 +191,7 @@ export function normalizeStudyTrackerIdeaPayload(payload: unknown): StudyTracker
   return {
     presented_at: parseOptionalDate(body.presented_at, "presented_at"),
     presenter: parseRequiredString(body.presenter, "presenter"),
+    category,
     company_name: parseRequiredString(body.company_name, "company_name"),
     ticker: parseRequiredString(body.ticker, "ticker"),
     sector: parseOptionalString(body.sector),

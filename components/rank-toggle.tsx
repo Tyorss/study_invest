@@ -8,13 +8,13 @@ export function RankToggle({ active }: { active: "return" | "sharpe" }) {
   return (
     <div className="inline-flex gap-2">
       <Link
-        href="/?rank=return"
+        href="/mock-trading?rank=return"
         className={`${base} ${active === "return" ? activeCls : idleCls}`}
       >
         수익률 순
       </Link>
       <Link
-        href="/?rank=sharpe"
+        href="/mock-trading?rank=sharpe"
         className={`${base} ${active === "sharpe" ? activeCls : idleCls}`}
       >
         샤프 순
